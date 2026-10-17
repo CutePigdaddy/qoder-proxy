@@ -8,3 +8,7 @@ coverage/
 
 # Agent-local project memory (not part of the shipped project)
 .workbuddy/
+
+# pnpm artifacts are not used here; npm + package-lock.json is the only installer
+pnpm-lock.yaml
+pnpm-workspace.yaml
