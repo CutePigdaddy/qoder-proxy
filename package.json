@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "probe": "tsx scripts/signature-probe.ts"
+    "probe": "tsx scripts/signature-probe.ts",
+    "matrix": "tsx scripts/model-matrix.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",

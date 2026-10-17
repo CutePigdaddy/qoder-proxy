@@ -94,7 +94,39 @@ for chunk in stream:
     print(chunk.choices[0].delta.content or "", end="")
 ```
 
-模型名不必精确：真实 wire key 直通，常见别名按 `config/models.json` 映射，未知名回退到 `auto`。`/v1/models` 返回从上游动态拉取的真实目录（拉取失败时回落 `auto` / `lite` / `performance` / `ultimate`）。
+### 模型名怎么填
+
+解析顺序（大小写、空格、`-`/`_` 都不敏感）：
+
+1. 精确 wire key —— `dmodel`
+2. 目录里的显示名 —— `DeepSeek-V4-Pro`
+3. `config/models.json` 里的别名 —— `gpt-4o`
+4. 都匹配不到则回退到 `MODEL_FALLBACK`（默认 `auto`），响应里的 `model` 字段会告诉你实际用了谁
+
+上游 `model/list` 的常见条目（wire key ← 显示名）：
+
+| wire key | 显示名 | 推理 |
+| --- | --- | --- |
+| `auto` | Auto | ✅ |
+| `qmodel_38max` | Qwen3.8-Max | ✅ |
+| `qfmodel` | Qwen3.8-Flash | ✅ |
+| `qmodel_latest` | Qwen3.7-Max | ✅ |
+| `qmodel` | Qwen3.7-Plus | ✅ |
+| `q37fmodel` | Qwen3.7-Flash | ✅ |
+| `dmodel` | DeepSeek-V4-Pro | ✅ |
+| `dfmodel` | DeepSeek-Flash | ✅ |
+| `gmodel` | GLM-5.3 | ✅ |
+| `gfmodel` | GLM-5.3-Flash | ✅ |
+| `gm51model` | GLM-5.2 | ✅ |
+| `kmodel_latest` | Kimi-K3 | ✅ |
+| `kmodel` | Kimi-K2.8-Preview | ✅ |
+| `mmodel` | MiniMax-M2.7 | ✅ |
+
+> **注意**：直连上游时**只能**传 wire key。传显示名（`DeepSeek-V4-Pro`）会被网关拒成 `400 该模型当前未对账号开放`——本代理已在解析层帮你转换，所以两个名字都能用。
+>
+> 想知道自己账号当下能用的完整清单与逐模型连通性，跑 `npm run matrix`（会真实消耗少量额度）。
+
+`/v1/models` 返回从上游动态拉取的目录（拉取失败时回落 `auto` / `lite` / `performance` / `ultimate`）。
 
 ## 端点
 

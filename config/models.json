@@ -1,16 +1,22 @@
 {
   "aliases": {
     "gpt-4o": "auto",
-    "gpt-4o-mini": "lite",
-    "gpt-4": "performance",
-    "gpt-3.5-turbo": "lite",
-    "claude-sonnet-4-5": "performance",
-    "claude-3-5-sonnet": "performance",
-    "claude-3-5-haiku": "lite",
-    "deepseek-chat": "auto",
-    "deepseek-reasoner": "performance",
-    "qwen-max": "performance",
-    "qwen-plus": "auto"
+    "gpt-4o-mini": "q37fmodel",
+    "gpt-4": "qmodel_latest",
+    "gpt-4-turbo": "qmodel_latest",
+    "gpt-3.5-turbo": "q37fmodel",
+    "o3": "dmodel",
+    "claude-sonnet-4-5": "qmodel_38max",
+    "claude-3-5-sonnet": "qmodel_latest",
+    "claude-3-5-haiku": "q37fmodel",
+    "deepseek-chat": "dmodel",
+    "deepseek-reasoner": "dmodel",
+    "qwen-max": "qmodel_38max",
+    "qwen-plus": "qmodel",
+    "qwen-flash": "qfmodel",
+    "glm-4.6": "gmodel",
+    "kimi-k2": "kmodel",
+    "minimax": "mmodel"
   },
   "fallback": "auto"
 }

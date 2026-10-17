@@ -12,6 +12,8 @@ export interface ResolvedModel {
   key: string;
   isReasoning: boolean;
   maxOutputTokens: number;
+  /** How the key was chosen, for logging and debugging clients. */
+  matched?: 'key' | 'display' | 'alias' | 'fallback';
 }
 
 interface ToolCallDelta {

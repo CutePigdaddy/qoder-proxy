@@ -35,19 +35,33 @@ describe('ModelResolver', () => {
     expect(resolved.key).toBe('performance');
   });
 
+  it('maps a catalog display name onto its wire key', async () => {
+    const resolved = await resolver.resolve('Qwen 3.7 Max');
+    expect(resolved.key).toBe('qmodel_latest');
+    expect(resolved.matched).toBe('display');
+  });
+
+  it('ignores case and separators when matching keys and aliases', async () => {
+    expect((await resolver.resolve('QWEN-3.7-MAX')).key).toBe('qmodel_latest');
+    expect((await resolver.resolve('Qmodel_Latest')).key).toBe('qmodel_latest');
+    expect((await resolver.resolve('GPT-4O')).key).toBe('auto');
+  });
+
   it('falls back for unknown names instead of failing', async () => {
     const resolved = await resolver.resolve('gpt-9-ultra');
     expect(resolved.key).toBe('auto');
+    expect(resolved.matched).toBe('fallback');
   });
 
-  it('still returns a key when the alias target is not in the catalog', async () => {
+  it('falls back when an alias points outside the catalog', async () => {
     const local = new ModelResolver({
       catalog: fakeCatalog(),
       aliases: { 'gpt-4': 'phantom-tier' },
       fallback: 'auto',
     });
     const resolved = await local.resolve('gpt-4');
-    expect(resolved.key).toBe('phantom-tier');
+    expect(resolved.key).toBe('auto');
+    expect(resolved.matched).toBe('fallback');
   });
 
   it('lists the live catalog', async () => {

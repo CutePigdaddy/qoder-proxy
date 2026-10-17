@@ -1,4 +1,3 @@
-import { serve } from '@hono/node-server';
 import { loadConfig } from './config.js';
 import { loadEnvFile } from './env.js';
 import { AdmissionGate } from './concurrency/admission.js';
@@ -9,22 +8,26 @@ import { QoderClient } from './qoder/client.js';
 import { CredentialStore } from './qoder/credentialStore.js';
 import { resolveEndpoints } from './qoder/endpoints.js';
 import { ModelCatalog } from './qoder/modelCatalog.js';
-import { runProbe } from './probe.js';
-import { createApp } from './server/app.js';
 
-function main(): void {
+async function main(): Promise<void> {
   loadEnvFile();
 
   // `node dist/index.js --probe` verifies credentials + COSY signing and exits.
+  // Loaded dynamically so the probe works even where the HTTP stack is absent.
   if (process.argv.includes('--probe')) {
-    runProbe()
-      .then((code) => process.exit(code))
-      .catch((error: unknown) => {
-        logger.error({ err: error instanceof Error ? error.message : String(error) }, 'probe failed');
-        process.exit(1);
-      });
-    return;
+    try {
+      const { runProbe } = await import('./probe.js');
+      process.exit(await runProbe());
+    } catch (error: unknown) {
+      logger.error({ err: error instanceof Error ? error.message : String(error) }, 'probe failed');
+      process.exit(1);
+    }
   }
+
+  const [{ serve }, { createApp }] = await Promise.all([
+    import('@hono/node-server'),
+    import('./server/app.js'),
+  ]);
 
   let config;
   try {
@@ -95,4 +98,7 @@ function main(): void {
   });
 }
 
-main();
+main().catch((error: unknown) => {
+  logger.error({ err: error instanceof Error ? error.message : String(error) }, 'fatal startup error');
+  process.exit(1);
+});

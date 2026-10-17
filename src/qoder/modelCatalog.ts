@@ -19,14 +19,16 @@ const REMOTE_TIMEOUT_MS = 8_000;
 const DEFAULT_MAX_OUTPUT = 32_768;
 
 /**
- * Conservative tiers used before the live catalog is reachable. These are the
- * names the CN CLI accepts even when discovery fails.
+ * Conservative tiers used before the live catalog is reachable. These are real
+ * wire keys the CN gateway accepts — inventing tier names here (`lite`,
+ * `performance`) only produces `400` once the catalog fetch fails.
  */
 const FALLBACK_ENTRIES: CatalogEntry[] = [
   { key: 'auto', displayName: 'Auto', isReasoning: false, maxOutputTokens: DEFAULT_MAX_OUTPUT },
-  { key: 'lite', displayName: 'Lite', isReasoning: false, maxOutputTokens: DEFAULT_MAX_OUTPUT },
-  { key: 'performance', displayName: 'Performance', isReasoning: false, maxOutputTokens: DEFAULT_MAX_OUTPUT },
-  { key: 'ultimate', displayName: 'Ultimate', isReasoning: true, maxOutputTokens: DEFAULT_MAX_OUTPUT },
+  { key: 'qmodel_latest', displayName: 'Qwen3.7-Max', isReasoning: true, maxOutputTokens: DEFAULT_MAX_OUTPUT },
+  { key: 'qmodel', displayName: 'Qwen3.7-Plus', isReasoning: false, maxOutputTokens: DEFAULT_MAX_OUTPUT },
+  { key: 'q37fmodel', displayName: 'Qwen3.7-Flash', isReasoning: false, maxOutputTokens: DEFAULT_MAX_OUTPUT },
+  { key: 'dmodel', displayName: 'DeepSeek-V4-Pro', isReasoning: true, maxOutputTokens: DEFAULT_MAX_OUTPUT },
 ];
 
 function asRecord(value: unknown): Record<string, unknown> | null {
