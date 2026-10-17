@@ -12,3 +12,6 @@ coverage/
 # pnpm artifacts are not used here; npm + package-lock.json is the only installer
 pnpm-lock.yaml
 pnpm-workspace.yaml
+
+# stray temp files written by tooling
+_tmp_*
