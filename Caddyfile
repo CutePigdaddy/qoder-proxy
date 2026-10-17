@@ -1,5 +1,8 @@
 {$DOMAIN:localhost} {
-	encode zstd gzip
+	# Compress ordinary responses, but never touch SSE: a compressed stream
+	# makes Caddy buffer the body and the client sees nothing until the end.
+	@notEventStream not header Content-Type text/event-stream
+	encode @notEventStream zstd gzip
 
 	reverse_proxy qoder-proxy:3000 {
 		# Disable response buffering so SSE chunks reach the client immediately.

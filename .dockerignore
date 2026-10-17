@@ -1,0 +1,16 @@
+# Build inputs are package files + tsconfig + src + config only.
+node_modules
+dist
+.git
+.gitignore
+.cache
+coverage
+test
+examples
+*.log
+
+# Never let local secrets or agent state reach the build context.
+.env
+.env.*
+!.env.example
+.workbuddy
