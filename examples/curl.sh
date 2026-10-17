@@ -4,7 +4,7 @@ set -euo pipefail
 
 BASE="${PROXY_BASE_URL:-http://127.0.0.1:3000/v1}"
 KEY="${PROXY_API_KEY:?set PROXY_API_KEY first}"
-MODEL="${PROXY_MODEL:-auto}"
+MODEL="${PROXY_MODEL:-Auto}"
 
 echo "== models =="
 curl -s "$BASE/models" -H "Authorization: Bearer $KEY" | head -c 600; echo

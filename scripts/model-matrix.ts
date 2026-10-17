@@ -70,7 +70,12 @@ async function main(): Promise<void> {
           maxTokens: 2048,
           stream: true,
         },
-        { key: entry.key, isReasoning: entry.isReasoning, maxOutputTokens: entry.maxOutputTokens },
+        {
+          key: entry.key,
+          id: entry.displayName,
+          isReasoning: entry.isReasoning,
+          maxOutputTokens: entry.maxOutputTokens,
+        },
         controller.signal,
       )) {
         if (event.type === 'text-delta') text += event.text;

@@ -22,9 +22,9 @@ pip install openai && python examples/python_openai.py
 
 - Base URL：`http://你的地址:3000/v1`
 - API Key：`.env` 里的 `PROXY_API_KEY`
-- 模型：填 `auto` 最省事；要锁定具体模型就填 wire key —— `qmodel_38max`（Qwen3.8-Max）、`dmodel`（DeepSeek-V4-Pro）、`kmodel_latest`（Kimi-K3）、`q37fmodel`（Qwen3.7-Flash）等，完整清单见主 [README](../README.md)。
+- 模型：填 `Auto` 最省事；要锁定具体模型就填显示名 —— `DeepSeek-V4-Pro`、`Qwen3.8-Max`、`Kimi-K3`、`Qwen3.7-Flash` 等，完整清单见主 [README](../README.md)。
 
-> 不建议「随便填一个」：未知名会**静默回退**到 `auto`，看起来能用，其实换模型了。填完发一次请求，看响应里的 `model` 字段核对。
+> 不要填 `dmodel`、`qmodel_38max` 这类内部 key（能用但不直观），也不要「随便编一个」：未知名会**静默回退**到 `Auto`，看起来正常，其实换模型了。填完发一次请求，看响应里的 `model` 字段核对。
 
 **LangChain（Python）**
 

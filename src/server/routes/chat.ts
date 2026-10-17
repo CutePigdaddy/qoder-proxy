@@ -47,7 +47,9 @@ export function registerChat(app: Hono, deps: Deps): void {
       const req = parsed.value;
 
       const model = await deps.resolver.resolve(req.model);
-      modelKey = model.key;
+      // Clients and metrics speak the readable name; only the upstream gets the key.
+      modelKey = model.id;
+      deps.logger.debug({ model: model.id, upstream: model.key, matched: model.matched }, 'model resolved');
 
       try {
         release = await deps.gate.enter();
@@ -76,7 +78,7 @@ export function registerChat(app: Hono, deps: Deps): void {
       if (req.stream) {
         return streamSSE(c, async (stream) => {
           stream.onAbort(() => controller.abort());
-          const encoder = new OpenAIStreamEncoder(model.key);
+          const encoder = new OpenAIStreamEncoder(model.id);
           // OpenAI sends usage only when asked, and only after finish_reason.
           let pendingUsage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | null =
             null;
@@ -151,7 +153,7 @@ export function registerChat(app: Hono, deps: Deps): void {
 
       record('200');
       cleanup();
-      return c.json(accumulator.toCompletion(model.key));
+      return c.json(accumulator.toCompletion(model.id));
     } catch (error) {
       cleanup?.();
       const status = error instanceof HttpError ? error.status : 502;

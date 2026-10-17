@@ -15,7 +15,19 @@ const EnvSchema = z.object({
   MODELS_CONFIG_PATH: z.string().default('config/models.json'),
 });
 
+export interface ModelMapping {
+  /** Name clients see in `/v1/models` and send as `model`. */
+  id: string;
+  /** Wire key the upstream chat endpoint expects. */
+  upstream: string;
+  /** Optional overrides when the live catalog does not list this key. */
+  isReasoning?: boolean;
+  maxOutputTokens?: number;
+}
+
 export interface ModelsConfig {
+  /** Curated client-facing name -> upstream wire key table. */
+  models: ModelMapping[];
   aliases: Record<string, string>;
   fallback: string;
 }
@@ -60,7 +72,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
 }
 
 function loadModelsConfig(path: string, fallback: string): ModelsConfig {
-  if (!existsSync(path)) return { aliases: {}, fallback };
+  if (!existsSync(path)) return { models: [], aliases: {}, fallback };
   try {
     const raw = JSON.parse(readFileSync(path, 'utf8')) as Partial<ModelsConfig>;
     const aliases: Record<string, string> = {};
@@ -69,9 +81,24 @@ function loadModelsConfig(path: string, fallback: string): ModelsConfig {
         if (typeof v === 'string' && v.trim()) aliases[k] = v.trim();
       }
     }
+    const models: ModelMapping[] = [];
+    if (Array.isArray(raw.models)) {
+      for (const item of raw.models) {
+        if (!item || typeof item !== 'object') continue;
+        const { id, upstream, isReasoning, maxOutputTokens } = item as Partial<ModelMapping>;
+        if (typeof id !== 'string' || !id.trim()) continue;
+        if (typeof upstream !== 'string' || !upstream.trim()) continue;
+        models.push({
+          id: id.trim(),
+          upstream: upstream.trim(),
+          ...(typeof isReasoning === 'boolean' ? { isReasoning } : {}),
+          ...(typeof maxOutputTokens === 'number' && maxOutputTokens > 0 ? { maxOutputTokens } : {}),
+        });
+      }
+    }
     const fb = typeof raw.fallback === 'string' && raw.fallback.trim() ? raw.fallback.trim() : fallback;
-    return { aliases, fallback: fb };
+    return { models, aliases, fallback: fb };
   } catch {
-    return { aliases: {}, fallback };
+    return { models: [], aliases: {}, fallback };
   }
 }

@@ -25,7 +25,7 @@ if (existsSync(envPath)) {
 
 const BASE = process.env.PROXY_BASE_URL ?? 'http://127.0.0.1:3000/v1';
 const KEY = process.env.PROXY_API_KEY;
-const MODEL = process.env.PROXY_MODEL ?? 'auto';
+const MODEL = process.env.PROXY_MODEL ?? 'Auto';
 
 if (!KEY) {
   console.error('PROXY_API_KEY is not set (checked env and .env)');

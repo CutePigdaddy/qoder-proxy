@@ -52,6 +52,7 @@ async function main(): Promise<void> {
   const gate = new AdmissionGate(config.concurrency, config.queueLimit);
   const resolver = new ModelResolver({
     catalog,
+    models: config.models.models,
     aliases: config.models.aliases,
     fallback: config.models.fallback,
   });

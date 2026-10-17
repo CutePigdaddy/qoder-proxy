@@ -30,7 +30,7 @@ client = OpenAI(
     base_url=os.getenv("PROXY_BASE_URL", "http://127.0.0.1:3000/v1"),
     api_key=os.environ["PROXY_API_KEY"],
 )
-MODEL = os.getenv("PROXY_MODEL", "auto")
+MODEL = os.getenv("PROXY_MODEL", "Auto")
 
 
 def demo_non_stream() -> None:

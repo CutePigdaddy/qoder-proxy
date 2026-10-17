@@ -10,10 +10,12 @@ import { decodeQoderSse } from './sseDecoder.js';
 export interface ResolvedModel {
   /** Wire key sent as `model_config.key` and `X-Model-Key`. */
   key: string;
+  /** Client-facing name echoed back to the caller, e.g. `DeepSeek-V4-Pro`. */
+  id: string;
   isReasoning: boolean;
   maxOutputTokens: number;
   /** How the key was chosen, for logging and debugging clients. */
-  matched?: 'key' | 'display' | 'alias' | 'fallback';
+  matched?: 'key' | 'mapped' | 'display' | 'alias' | 'fallback';
 }
 
 interface ToolCallDelta {

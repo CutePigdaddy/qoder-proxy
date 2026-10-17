@@ -67,7 +67,7 @@ curl http://127.0.0.1:3000/health
 curl http://127.0.0.1:3000/v1/chat/completions \
   -H "Authorization: Bearer $PROXY_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"model":"auto","messages":[{"role":"user","content":"hello"}]}'
+  -d '{"model":"DeepSeek-V4-Pro","messages":[{"role":"user","content":"hello"}]}'
 ```
 
 流式：
@@ -76,7 +76,7 @@ curl http://127.0.0.1:3000/v1/chat/completions \
 curl -N http://127.0.0.1:3000/v1/chat/completions \
   -H "Authorization: Bearer $PROXY_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"model":"auto","stream":true,"messages":[{"role":"user","content":"hello"}]}'
+  -d '{"model":"DeepSeek-V4-Pro","stream":true,"messages":[{"role":"user","content":"hello"}]}'
 ```
 
 OpenAI SDK：
@@ -86,7 +86,7 @@ from openai import OpenAI
 
 client = OpenAI(base_url="http://127.0.0.1:3000/v1", api_key="sk-your-key")
 stream = client.chat.completions.create(
-    model="auto",
+    model="DeepSeek-V4-Pro",
     messages=[{"role": "user", "content": "hello"}],
     stream=True,
 )
@@ -96,33 +96,42 @@ for chunk in stream:
 
 ### 模型名怎么填
 
+**填显示名就行**，代理内部换成上游 wire key 再转发：客户端写 `DeepSeek-V4-Pro`，真正发给 Qoder 的是 `dmodel`。
+
+映射表在 [`config/models.json`](./config/models.json)：
+
+| 显示名（客户端填这个） | 上游 wire key | 推理 |
+| --- | --- | --- |
+| `Auto` | `auto` | ✅ |
+| `Qwen3.8-Max` | `qmodel_38max` | ✅ |
+| `Qwen3.8-Flash` | `qfmodel` | ✅ |
+| `Qwen3.7-Max` | `qmodel_latest` | ✅ |
+| `Qwen3.7-Plus` | `qmodel` | |
+| `Qwen3.7-Flash` | `q37fmodel` | |
+| `DeepSeek-V4-Pro` | `dmodel` | ✅ |
+| `DeepSeek-Flash` | `dfmodel` | ✅ |
+| `GLM-5.3` | `gmodel` | ✅ |
+| `GLM-5.3-Flash` | `gfmodel` | |
+| `GLM-5.2` | `gm51model` | ✅ |
+| `Kimi-K3` | `kmodel_latest` | ✅ |
+| `Kimi-K2.8-Preview` | `kmodel` | ✅ |
+| `MiniMax-M2.7` | `mmodel` | ✅ |
+
 解析顺序（大小写、空格、`-`/`_` 都不敏感）：
 
-1. 精确 wire key —— `dmodel`
-2. 目录里的显示名 —— `DeepSeek-V4-Pro`
-3. `config/models.json` 里的别名 —— `gpt-4o`
-4. 都匹配不到则回退到 `MODEL_FALLBACK`（默认 `auto`），响应里的 `model` 字段会告诉你实际用了谁
+1. 映射表的显示名 —— `DeepSeek-V4-Pro` / `deepseek-v4-pro` / `DeepSeek V4 Pro` 都能命中
+2. 上游原始 wire key —— `dmodel`（脚本与旧配置仍可用）
+3. `config/models.json` 的 `aliases` —— `gpt-4o` → `Auto`
+4. 上游新出现、表里还没有的模型 —— 直接用它的显示名（`/v1/models` 会自动列出来）
+5. 都匹配不到 —— 回退 `MODEL_FALLBACK`
 
-上游 `model/list` 的常见条目（wire key ← 显示名）：
+响应里的 `model` 字段回显**可读名**：请求 `qwen3.8-max` 会返回 `Qwen3.8-Max`；请求未知名会返回 `Auto` —— 一眼能看出实际跑了哪个模型。
 
-| wire key | 显示名 | 推理 |
-| --- | --- | --- |
-| `auto` | Auto | ✅ |
-| `qmodel_38max` | Qwen3.8-Max | ✅ |
-| `qfmodel` | Qwen3.8-Flash | ✅ |
-| `qmodel_latest` | Qwen3.7-Max | ✅ |
-| `qmodel` | Qwen3.7-Plus | ✅ |
-| `q37fmodel` | Qwen3.7-Flash | ✅ |
-| `dmodel` | DeepSeek-V4-Pro | ✅ |
-| `dfmodel` | DeepSeek-Flash | ✅ |
-| `gmodel` | GLM-5.3 | ✅ |
-| `gfmodel` | GLM-5.3-Flash | ✅ |
-| `gm51model` | GLM-5.2 | ✅ |
-| `kmodel_latest` | Kimi-K3 | ✅ |
-| `kmodel` | Kimi-K2.8-Preview | ✅ |
-| `mmodel` | MiniMax-M2.7 | ✅ |
+`/v1/models` 的 `id` 就是这些显示名，并额外带一个 `upstream_model` 字段（如 `dmodel`）便于排障。
 
-> **注意**：直连上游时**只能**传 wire key。传显示名（`DeepSeek-V4-Pro`）会被网关拒成 `400 该模型当前未对账号开放`——本代理已在解析层帮你转换，所以两个名字都能用。
+> **为什么需要这层翻译**：Qoder 聊天端点只认 wire key，直接把显示名发过去会返回 `400 该模型当前未对账号开放`。
+>
+> 想改名或增删模型：编辑 `config/models.json` 的 `models` 数组后重启。上游新增、表里没有的模型会自动以显示名出现，不需要改配置。
 >
 > 想知道自己账号当下能用的完整清单与逐模型连通性，跑 `npm run matrix`（会真实消耗少量额度）。
 
@@ -134,46 +143,51 @@ Dify「自定义供应商」、Cherry Studio、ChatBox、NextChat、LobeChat、�
 | --- | --- | --- |
 | Base URL / API 地址 | `https://你的域名/v1` | 必须是 `/v1` 结尾；有的客户端会自动补，见下方 404 排查 |
 | API Key | `.env` 里的 `PROXY_API_KEY` | 就是你自己定义的那串 `sk-...`，不是 Qoder 的 PAT |
-| 模型名 / Model ID | 下表任选，**填 `auto` 最省事** | Qoder 侧会自己挑模型，永远可用 |
+| 模型名 / Model ID | 下表任选，**填 `Auto` 最省事** | 填显示名（`DeepSeek-V4-Pro` 这种），不要填 `dmodel` 这类内部 key |
 
 可直接复制的模型名（一行一个，多数客户端支持粘贴多行批量导入）：
 
 ```
-auto
-qmodel_38max
-qmodel_latest
-qmodel
-q37fmodel
-dmodel
-kmodel_latest
-gmodel
-mmodel
+Auto
+Qwen3.8-Max
+Qwen3.8-Flash
+Qwen3.7-Max
+Qwen3.7-Plus
+Qwen3.7-Flash
+DeepSeek-V4-Pro
+DeepSeek-Flash
+GLM-5.3
+GLM-5.3-Flash
+GLM-5.2
+Kimi-K3
+Kimi-K2.8-Preview
+MiniMax-M2.7
 ```
 
 挑选建议：
 
-- **不想纠结就填 `auto`**——它一定存在，由 Qoder 决定实际模型。
-- **想锁定具体模型就填 wire key**（上表左列），例如固定用 DeepSeek 就把模型名写成 `dmodel`。
-- 想要便宜/快的档位：`q37fmodel`、`qfmodel`、`dfmodel`；想要最强的：`qmodel_38max`、`dmodel`、`kmodel_latest`。
+- **不想纠结就填 `Auto`**——它一定存在，由 Qoder 决定实际模型。
+- **想锁定具体模型就填对应显示名**，例如固定用 DeepSeek V4 就填 `DeepSeek-V4-Pro`。
+- 便宜/快的档位：`Qwen3.7-Flash`、`Qwen3.8-Flash`、`DeepSeek-Flash`；最强的：`Qwen3.8-Max`、`DeepSeek-V4-Pro`、`Kimi-K3`。
 
 命名上的三条注意事项：
 
-1. **别加供应商前缀**。写成 `qoder/dmodel`、`openai/dmodel` 不匹配任何规则，会**静默回退到 `auto`**——看起来「能用」，其实换模型了。
-2. **显示名（`DeepSeek-V4-Pro`）也能填**，本代理做的是容错匹配；但含空格的名字在个别客户端会被自动去空格/改大小写，既然能容错就仍然命中，只是不如 wire key 稳。
-3. **填错不会报错**，一律回退 `auto`。所以配置完建议发一次请求，看响应里的 `model` 字段确认实际用的是哪个模型。
+1. **别加供应商前缀**。写成 `qoder/DeepSeek-V4-Pro`、`openai/deepseek-v4-pro` 不匹配任何规则，会**静默回退到 `Auto`**——看起来「能用」，其实换模型了。
+2. **大小写、空格、`-`/`_` 都不敏感**。`DeepSeek-V4-Pro`、`deepseek v4 pro`、`DEEPSEEK_V4_PRO` 指向同一个模型；即使客户端改写名字也不影响。
+3. **填错不会报错**，一律回退 `Auto`。配置完建议发一次请求，看响应里的 `model` 字段确认实际用了哪个模型。
 
 ```bash
 # 配置完自检：确认你填的名字解析到了哪个模型
 curl -s https://你的域名/v1/chat/completions \
   -H "Authorization: Bearer $PROXY_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"model":"dmodel","messages":[{"role":"user","content":"ping"}],"max_tokens":8}' \
+  -d '{"model":"DeepSeek-V4-Pro","messages":[{"role":"user","content":"ping"}],"max_tokens":8}' \
   | grep -o '"model":"[^"]*"'
 ```
 
 **Base URL 的 404 排查**：若客户端报 404 但 `https://你的域名/health` 正常，基本都是路径重复——客户端自己补 `/v1`，而你又填了 `/v1`，实际打到了 `/v1/v1/chat/completions`。把 Base URL 改成不带 `/v1` 的裸域名再试。
 
-`/v1/models` 返回从上游动态拉取的目录；拉取失败时回落 `auto` / `qmodel_latest` / `qmodel` / `q37fmodel` / `dmodel`。
+`/v1/models` 返回的全部是可读显示名（先列 `config/models.json` 里的映射，再补上游新增的模型）；上游目录拉取失败时只回落 `config/models.json` 里的映射。
 
 ## 端点
 
@@ -196,7 +210,7 @@ curl -s https://你的域名/v1/chat/completions \
 | `REQUEST_TIMEOUT_MS` | `120000`             | 单请求总超时                                  |
 | `BODY_LIMIT`         | `10485760`           | 请求体上限（10 MB）                            |
 | `MODEL_FALLBACK`     | `auto`               | 未知名模型的回退档位                              |
-| `MODELS_CONFIG_PATH` | `config/models.json` | 别名表                                     |
+| `MODELS_CONFIG_PATH` | `config/models.json` | 模型映射表（显示名 → wire key）+ 别名表           |
 | `TOKEN_CACHE_PATH`   | `.cache/tokens.json` | jt/jrt 缓存（可丢，重启用 PAT 重换）                |
 | `LOG_LEVEL`          | `info`               | pino 级别                                 |
 | `DOMAIN`             | —                    | 仅 Caddyfile 使用                          |
