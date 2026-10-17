@@ -148,7 +148,7 @@ curl https://$DOMAIN/health
 ## 测试
 
 ```bash
-npm test          # 40 个单测：签名、编码、SSE 解包、并发、错误映射、适配层
+npm test          # 46 个单测：签名、编码、SSE 解包、并发、错误映射、适配层
 npm run typecheck
 ```
 

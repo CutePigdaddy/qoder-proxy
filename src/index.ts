@@ -9,10 +9,22 @@ import { QoderClient } from './qoder/client.js';
 import { CredentialStore } from './qoder/credentialStore.js';
 import { resolveEndpoints } from './qoder/endpoints.js';
 import { ModelCatalog } from './qoder/modelCatalog.js';
+import { runProbe } from './probe.js';
 import { createApp } from './server/app.js';
 
 function main(): void {
   loadEnvFile();
+
+  // `node dist/index.js --probe` verifies credentials + COSY signing and exits.
+  if (process.argv.includes('--probe')) {
+    runProbe()
+      .then((code) => process.exit(code))
+      .catch((error: unknown) => {
+        logger.error({ err: error instanceof Error ? error.message : String(error) }, 'probe failed');
+        process.exit(1);
+      });
+    return;
+  }
 
   let config;
   try {

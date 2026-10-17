@@ -96,6 +96,23 @@ describe('parseChatRequest', () => {
     expect(result.value.tools?.[0]?.name).toBe('lookup');
   });
 
+  it('reads stream_options.include_usage', () => {
+    const without = parseChatRequest({
+      model: 'auto',
+      messages: [{ role: 'user', content: 'hi' }],
+      stream: true,
+    });
+    expect(without.ok && without.value.includeUsage).toBe(false);
+
+    const withUsage = parseChatRequest({
+      model: 'auto',
+      messages: [{ role: 'user', content: 'hi' }],
+      stream: true,
+      stream_options: { include_usage: true },
+    });
+    expect(withUsage.ok && withUsage.value.includeUsage).toBe(true);
+  });
+
   it('rejects malformed payloads', () => {
     expect(parseChatRequest(null).ok).toBe(false);
     expect(parseChatRequest({ messages: [] }).ok).toBe(false);

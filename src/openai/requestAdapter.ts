@@ -172,6 +172,9 @@ export function parseChatRequest(body: unknown): ParseResult {
   const maxTokensRaw = record.max_completion_tokens ?? record.max_tokens;
   const maxTokens = typeof maxTokensRaw === 'number' && maxTokensRaw > 0 ? Math.floor(maxTokensRaw) : undefined;
 
+  const streamOptions = asRecord(record.stream_options);
+  const includeUsage = streamOptions?.include_usage === true;
+
   const effort = record.reasoning_effort;
   const reasoningEffort = typeof effort === 'string' && effort.trim() ? effort.trim() : undefined;
 
@@ -185,6 +188,7 @@ export function parseChatRequest(body: unknown): ParseResult {
       maxTokens,
       reasoningEffort,
       stream: record.stream === true,
+      includeUsage,
     },
   };
 }

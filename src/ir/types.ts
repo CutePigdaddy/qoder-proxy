@@ -53,6 +53,8 @@ export interface IRRequest {
   maxTokens?: number;
   reasoningEffort?: string;
   stream: boolean;
+  /** OpenAI `stream_options.include_usage`: emit a trailing usage chunk. */
+  includeUsage?: boolean;
 }
 
 export type IRFinishReason = 'stop' | 'tool_calls' | 'length' | 'error';

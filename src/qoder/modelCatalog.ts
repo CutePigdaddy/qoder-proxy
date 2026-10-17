@@ -41,7 +41,8 @@ function extractEntries(json: unknown, depth = 0): unknown[] {
   if (depth > 3) return [];
   const record = asRecord(json);
   if (!record) return [];
-  for (const key of ['data', 'models', 'list', 'result', 'items']) {
+  // The live CN gateway wraps entries in `chat`; accept the other spellings too.
+  for (const key of ['chat', 'data', 'models', 'list', 'result', 'items']) {
     const value = record[key];
     if (Array.isArray(value)) return value;
     if (value !== undefined) {
@@ -55,6 +56,8 @@ function extractEntries(json: unknown, depth = 0): unknown[] {
 function toEntry(raw: unknown): CatalogEntry | null {
   const record = asRecord(raw);
   if (!record) return null;
+
+  if (record.enable === false) return null;
 
   const keyCandidate = record.key ?? record.model ?? record.model_key ?? record.id ?? record.name;
   if (typeof keyCandidate !== 'string' || !keyCandidate.trim()) return null;
@@ -71,6 +74,16 @@ function toEntry(raw: unknown): CatalogEntry | null {
     thinkingConfig: record.thinking_config ?? record.thinkingConfig,
     contextConfig: record.context_config ?? record.contextConfig,
   };
+}
+
+/**
+ * Normalise a raw `model/list` payload into catalog entries.
+ * Exported so the real gateway shape can be locked down by a unit test.
+ */
+export function parseCatalogPayload(json: unknown): CatalogEntry[] {
+  return extractEntries(json)
+    .map(toEntry)
+    .filter((entry): entry is CatalogEntry => entry !== null);
 }
 
 /** Live model directory with a TTL cache and a static fallback. */
@@ -133,9 +146,7 @@ export class ModelCatalog {
     });
     if (!response.ok) throw new Error(`model catalog returned ${response.status}`);
 
-    const entries = extractEntries(await response.json())
-      .map(toEntry)
-      .filter((entry): entry is CatalogEntry => entry !== null);
+    const entries = parseCatalogPayload(await response.json());
 
     if (entries.length === 0) throw new Error('model catalog was empty');
 

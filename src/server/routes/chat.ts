@@ -77,6 +77,9 @@ export function registerChat(app: Hono, deps: Deps): void {
         return streamSSE(c, async (stream) => {
           stream.onAbort(() => controller.abort());
           const encoder = new OpenAIStreamEncoder(model.key);
+          // OpenAI sends usage only when asked, and only after finish_reason.
+          let pendingUsage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | null =
+            null;
 
           try {
             await stream.writeSSE({ data: JSON.stringify(encoder.roleFrame()) });
@@ -100,18 +103,17 @@ export function registerChat(app: Hono, deps: Deps): void {
                   });
                   break;
                 case 'usage':
-                  await stream.writeSSE({
-                    data: JSON.stringify(
-                      encoder.usage({
-                        prompt_tokens: event.promptTokens,
-                        completion_tokens: event.completionTokens,
-                        total_tokens: event.totalTokens,
-                      }),
-                    ),
-                  });
+                  pendingUsage = {
+                    prompt_tokens: event.promptTokens,
+                    completion_tokens: event.completionTokens,
+                    total_tokens: event.totalTokens,
+                  };
                   break;
                 case 'done':
                   await stream.writeSSE({ data: JSON.stringify(encoder.finish(event.finishReason)) });
+                  if (req.includeUsage && pendingUsage) {
+                    await stream.writeSSE({ data: JSON.stringify(encoder.usage(pendingUsage)) });
+                  }
                   break;
                 case 'error':
                   throw new HttpError(event.status ?? 502, event.message);
