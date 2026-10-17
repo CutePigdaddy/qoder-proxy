@@ -1,0 +1,8 @@
+{$DOMAIN:localhost} {
+	encode zstd gzip
+
+	reverse_proxy qoder-proxy:3000 {
+		# Disable response buffering so SSE chunks reach the client immediately.
+		flush_interval -1
+	}
+}

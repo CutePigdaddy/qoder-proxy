@@ -1,0 +1,16 @@
+{
+  "aliases": {
+    "gpt-4o": "auto",
+    "gpt-4o-mini": "lite",
+    "gpt-4": "performance",
+    "gpt-3.5-turbo": "lite",
+    "claude-sonnet-4-5": "performance",
+    "claude-3-5-sonnet": "performance",
+    "claude-3-5-haiku": "lite",
+    "deepseek-chat": "auto",
+    "deepseek-reasoner": "performance",
+    "qwen-max": "performance",
+    "qwen-plus": "auto"
+  },
+  "fallback": "auto"
+}
