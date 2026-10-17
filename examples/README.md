@@ -18,11 +18,13 @@ pip install openai && python examples/python_openai.py
 
 ## 其他客户端接入
 
-**Open WebUI / Dify / AnythingLLM / Cherry Studio** 等：在「OpenAI 兼容」设置里填
+**Open WebUI / Dify / AnythingLLM / Cherry Studio** 等：在「OpenAI 兼容 / 自定义供应商」里填
 
 - Base URL：`http://你的地址:3000/v1`
 - API Key：`.env` 里的 `PROXY_API_KEY`
-- 模型：随便填，未知名会回退到 `auto`
+- 模型：填 `auto` 最省事；要锁定具体模型就填 wire key —— `qmodel_38max`（Qwen3.8-Max）、`dmodel`（DeepSeek-V4-Pro）、`kmodel_latest`（Kimi-K3）、`q37fmodel`（Qwen3.7-Flash）等，完整清单见主 [README](../README.md)。
+
+> 不建议「随便填一个」：未知名会**静默回退**到 `auto`，看起来能用，其实换模型了。填完发一次请求，看响应里的 `model` 字段核对。
 
 **LangChain（Python）**
 

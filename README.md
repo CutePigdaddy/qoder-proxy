@@ -126,7 +126,54 @@ for chunk in stream:
 >
 > 想知道自己账号当下能用的完整清单与逐模型连通性，跑 `npm run matrix`（会真实消耗少量额度）。
 
-`/v1/models` 返回从上游动态拉取的目录（拉取失败时回落 `auto` / `lite` / `performance` / `ultimate`）。
+#### 客户端不会拉取 `/v1/models` 时怎么填
+
+Dify「自定义供应商」、Cherry Studio、ChatBox、NextChat、LobeChat、各类 SDK / 脚本这类**要你手打模型名**的地方，按下面三个字段填即可：
+
+| 字段 | 填什么 | 说明 |
+| --- | --- | --- |
+| Base URL / API 地址 | `https://你的域名/v1` | 必须是 `/v1` 结尾；有的客户端会自动补，见下方 404 排查 |
+| API Key | `.env` 里的 `PROXY_API_KEY` | 就是你自己定义的那串 `sk-...`，不是 Qoder 的 PAT |
+| 模型名 / Model ID | 下表任选，**填 `auto` 最省事** | Qoder 侧会自己挑模型，永远可用 |
+
+可直接复制的模型名（一行一个，多数客户端支持粘贴多行批量导入）：
+
+```
+auto
+qmodel_38max
+qmodel_latest
+qmodel
+q37fmodel
+dmodel
+kmodel_latest
+gmodel
+mmodel
+```
+
+挑选建议：
+
+- **不想纠结就填 `auto`**——它一定存在，由 Qoder 决定实际模型。
+- **想锁定具体模型就填 wire key**（上表左列），例如固定用 DeepSeek 就把模型名写成 `dmodel`。
+- 想要便宜/快的档位：`q37fmodel`、`qfmodel`、`dfmodel`；想要最强的：`qmodel_38max`、`dmodel`、`kmodel_latest`。
+
+命名上的三条注意事项：
+
+1. **别加供应商前缀**。写成 `qoder/dmodel`、`openai/dmodel` 不匹配任何规则，会**静默回退到 `auto`**——看起来「能用」，其实换模型了。
+2. **显示名（`DeepSeek-V4-Pro`）也能填**，本代理做的是容错匹配；但含空格的名字在个别客户端会被自动去空格/改大小写，既然能容错就仍然命中，只是不如 wire key 稳。
+3. **填错不会报错**，一律回退 `auto`。所以配置完建议发一次请求，看响应里的 `model` 字段确认实际用的是哪个模型。
+
+```bash
+# 配置完自检：确认你填的名字解析到了哪个模型
+curl -s https://你的域名/v1/chat/completions \
+  -H "Authorization: Bearer $PROXY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"dmodel","messages":[{"role":"user","content":"ping"}],"max_tokens":8}' \
+  | grep -o '"model":"[^"]*"'
+```
+
+**Base URL 的 404 排查**：若客户端报 404 但 `https://你的域名/health` 正常，基本都是路径重复——客户端自己补 `/v1`，而你又填了 `/v1`，实际打到了 `/v1/v1/chat/completions`。把 Base URL 改成不带 `/v1` 的裸域名再试。
+
+`/v1/models` 返回从上游动态拉取的目录；拉取失败时回落 `auto` / `qmodel_latest` / `qmodel` / `q37fmodel` / `dmodel`。
 
 ## 端点
 
@@ -180,7 +227,7 @@ curl https://$DOMAIN/health
 ## 测试
 
 ```bash
-npm test          # 46 个单测：签名、编码、SSE 解包、并发、错误映射、适配层
+npm test          # 48 个单测：签名、编码、SSE 解包、并发、错误映射、模型解析、适配层
 npm run typecheck
 ```
 
