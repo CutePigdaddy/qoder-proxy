@@ -4,6 +4,13 @@
 	@notEventStream not header Content-Type text/event-stream
 	encode @notEventStream zstd gzip
 
+	# This gateway only serves the routes below. Internet-wide scanners spend
+	# their day probing /.env, /.git/HEAD, /wp-login.php and friends; answering
+	# them here keeps them out of the app and out of its logs. Add new routes
+	# to this list or they will be rejected at the edge.
+	@unknown not path / /health /metrics /v1/*
+	respond @unknown 404
+
 	reverse_proxy qoder-proxy:3000 {
 		# Disable response buffering so SSE chunks reach the client immediately.
 		flush_interval -1

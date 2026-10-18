@@ -5,6 +5,7 @@ import { registerChat } from './routes/chat.js';
 import { registerHealth } from './routes/health.js';
 import { registerMetrics } from './routes/metrics.js';
 import { registerModels } from './routes/models.js';
+import { registerRoot } from './routes/root.js';
 import type { Deps } from './deps.js';
 
 export function createApp(deps: Deps): Hono {
@@ -16,6 +17,7 @@ export function createApp(deps: Deps): Hono {
   // Prometheus scraping work without embedding the client key.
   registerHealth(app, deps);
   registerMetrics(app, deps);
+  registerRoot(app);
 
   app.use('/v1/*', authMiddleware(deps.config));
   registerChat(app, deps);
