@@ -1,10 +1,11 @@
 import crypto from 'node:crypto';
-import type { IREvent, IRMessage, IRRequest } from '../ir/types.js';
+import type { IREvent, IRRequest } from '../ir/types.js';
 import { HttpError, mapUpstreamFailure } from '../util/errors.js';
 import { encodeQoderBody } from './bodyCodec.js';
 import { buildCosyHeadersFor } from './cosySigner.js';
 import type { CredentialStore } from './credentialStore.js';
 import type { Endpoints } from './endpoints.js';
+import { buildMessages } from './messageBuilder.js';
 import { decodeQoderSse } from './sseDecoder.js';
 
 export interface ResolvedModel {
@@ -50,67 +51,6 @@ function stableId(prefix: string, ...parts: string[]): string {
   return hash.digest('hex').slice(0, 32);
 }
 
-function contentOf(message: IRMessage): unknown {
-  if (!message.parts || message.parts.length === 0) return message.content;
-  return message.parts.map((part) =>
-    part.type === 'text'
-      ? { type: 'text', text: part.text }
-      : { type: 'image_url', image_url: { url: `data:${part.mimeType};base64,${part.data}` } },
-  );
-}
-
-function buildMessages(req: IRRequest): { messages: unknown[]; system: string; lastUserText: string } {
-  const systemChunks: string[] = [];
-  if (req.system) systemChunks.push(req.system);
-
-  const messages: unknown[] = [];
-  let lastUserText = '';
-
-  for (const message of req.messages) {
-    switch (message.role) {
-      case 'system':
-        if (message.content) systemChunks.push(message.content);
-        break;
-      case 'user':
-        lastUserText = message.content;
-        messages.push({ role: 'user', content: contentOf(message) });
-        break;
-      case 'assistant': {
-        const out: Record<string, unknown> = { role: 'assistant', content: message.content };
-        if (message.toolCalls && message.toolCalls.length > 0) {
-          out.tool_calls = message.toolCalls.map((call) => ({
-            id: call.id,
-            type: 'function',
-            function: { name: call.name, arguments: JSON.stringify(call.arguments) },
-          }));
-        }
-        messages.push(out);
-        break;
-      }
-      case 'tool':
-        messages.push({
-          role: 'tool',
-          tool_call_id: message.toolCallId ?? '',
-          content: message.content,
-        });
-        break;
-    }
-  }
-
-  return {
-    // The gateway ignores a top-level `system` field; it only reads the
-    // conversation array. Keep the field for compatibility but carry the real
-    // instruction as a leading system message, otherwise client-side system
-    // prompts are silently discarded.
-    messages: [
-      ...(systemChunks.length > 0 ? [{ role: 'system', content: systemChunks.join('\n\n') }] : []),
-      ...messages,
-    ],
-    system: systemChunks.join('\n\n'),
-    lastUserText,
-  };
-}
-
 function parseToolArguments(raw: string, identity: string): Record<string, unknown> {
   if (!raw.trim()) return {};
   let parsed: unknown;
@@ -141,7 +81,7 @@ export class QoderClient {
 
   async *chat(req: IRRequest, model: ResolvedModel, signal: AbortSignal): AsyncGenerator<IREvent> {
     const creds = await this.opts.credentials.get();
-    const { messages, system, lastUserText } = buildMessages(req);
+    const { messages, lastUserText } = buildMessages(req);
 
     const tools = (req.tools ?? []).map((tool) => ({
       type: 'function',
@@ -180,7 +120,6 @@ export class QoderClient {
       chat_prompt: '',
       image_urls: null,
       aliyun_user_type: '',
-      system,
       messages,
       tools,
       parameters: {

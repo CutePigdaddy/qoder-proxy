@@ -10,14 +10,18 @@
 # 域名这一段可能有延迟，期间任何 ACME 验证都会失败。本脚本只在解析真的通
 # 之后才动作，避免无谓失败把 Let's Encrypt 的失败配额耗掉。
 #
-# 用法：
-#   bash scripts/switch-domain.sh              # 前台等待（Ctrl+C 可中断）
-#   nohup bash scripts/switch-domain.sh &      # 后台等待，日志在 .domain-switch.log
+# 用法（两个变量必填，不给默认值以免等错地址）：
+#   DOMAIN_TARGET=sg.pigdaddy.xyz EXPECT_IP=47.79.224.21 \
+#     bash scripts/switch-domain.sh
+#   nohup env DOMAIN_TARGET=... EXPECT_IP=... bash scripts/switch-domain.sh &
 # ---------------------------------------------------------------------------
 set -uo pipefail
 
-DOMAIN="${DOMAIN_TARGET:-pigdaddy.xyz}"
-EXPECT_IP="${EXPECT_IP:-120.55.48.92}"
+# Both values are required: guessing the target IP silently waits for the wrong
+# address for hours, so refuse to start instead of defaulting.
+: "${DOMAIN_TARGET:?请设置 DOMAIN_TARGET，例如 DOMAIN_TARGET=sg.pigdaddy.xyz}"
+: "${EXPECT_IP:?请设置 EXPECT_IP，例如 EXPECT_IP=47.79.224.21（本机公网 IP）}"
+DOMAIN="$DOMAIN_TARGET"
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 LOG_FILE="$PROJECT_DIR/.domain-switch.log"
 LOCK_FILE="/tmp/qoder-domain-switch.lock"
@@ -115,8 +119,10 @@ log "端到端验证（强制解析到 $EXPECT_IP 并校验证书链）..."
 health=$(curl -sS --resolve "$DOMAIN:443:$EXPECT_IP" -m 15 "https://$DOMAIN/health" 2>&1)
 log "/health -> $health"
 
-models_code=$(curl -sS --resolve "$DOMAIN:443:$EXPECT_IP" -m 20 -o /dev/null -w '%{http_code}' \
-  "https://$DOMAIN/v1/models" -H "Authorization: Bearer $(grep -E '^PROXY_API_KEY=' .env | cut -d= -f2-)" 2>&1)
+api_key=$(grep -E '^PROXY_API_KEY=' .env | head -1 | cut -d= -f2- || true)
+# Feed the header through stdin so the key never shows up in the process list.
+models_code=$(printf 'Authorization: Bearer %s\n' "$api_key" | curl -sS --resolve "$DOMAIN:443:$EXPECT_IP" \
+  -m 20 -o /dev/null -w '%{http_code}' -H @- "https://$DOMAIN/v1/models" 2>&1)
 log "/v1/models -> HTTP $models_code（200 正常，401 说明 KEY 不对）"
 
 if echo "$health" | grep -q '"ok"'; then

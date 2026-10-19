@@ -30,21 +30,27 @@ echo "  docker:  $(docker --version)"
 echo "  compose: $($COMPOSE version --short 2>/dev/null || echo unknown)"
 
 info 2/6 "镜像检查"
-has_node=0
-has_caddy=0
-docker image inspect node:22-alpine >/dev/null 2>&1 && has_node=1
-docker image inspect caddy:2-alpine >/dev/null 2>&1 && has_caddy=1
-if [ "$has_node" = 1 ]; then
-  echo "  node:22-alpine   已就绪"
-else
-  warn "缺少 node:22-alpine（构建会失败，需先导入）"
-fi
-if [ "$has_caddy" = 1 ]; then
-  echo "  caddy:2-alpine   已就绪"
-else
-  warn "缺少 caddy:2-alpine（将只启动网关，不含 HTTPS 反代）"
-fi
-[ "$has_node" = 1 ] || fail "缺少 node:22-alpine，无法构建。请先 docker load 或 pull 该镜像"
+# Base images are pulled when missing: an overseas host reaches Docker Hub
+# directly, and a fresh machine should not need a manual docker pull first.
+ensure_image() {
+  local image="$1"
+  if docker image inspect "$image" >/dev/null 2>&1; then
+    echo "  $image   已就绪"
+    return 0
+  fi
+  warn "缺少 $image，尝试拉取..."
+  if docker pull "$image" >/dev/null 2>&1; then
+    echo "  $image   已拉取"
+    return 0
+  fi
+  return 1
+}
+
+ensure_image node:22-alpine \
+  || fail "无法获取 node:22-alpine，构建无法进行（离线环境请先 docker load 该镜像）"
+has_caddy=1
+ensure_image caddy:2-alpine || has_caddy=0
+[ "$has_caddy" = 1 ] || warn "缺少 caddy:2-alpine（将只启动网关，不含 HTTPS 反代）"
 
 info 3/6 "配置检查"
 if [ ! -f .env ]; then
@@ -65,6 +71,8 @@ grep -qE '^QODERCN_PAT=.+' .env || fail ".env 中 QODERCN_PAT 为空（PAT 从 q
 grep -qE '^PROXY_API_KEY=.+' .env || fail ".env 中 PROXY_API_KEY 为空，可用以下命令生成：
   node -e \"console.log('sk-'+require('crypto').randomBytes(32).toString('hex'))\""
 echo "  .env 校验通过"
+# Read the domain so the HTTPS check below can verify the public entrypoint.
+DOMAIN="$(grep -E '^DOMAIN=' .env | head -1 | cut -d= -f2- || true)"
 
 info 4/6 "构建镜像"
 if ! $COMPOSE build; then
@@ -99,6 +107,25 @@ else
   warn "健康检查未通过，最近日志："
   $COMPOSE logs --tail 40 qoder-proxy
   exit 1
+fi
+
+# The loopback probe above says nothing about Caddy. When a domain is
+# configured, prove the public HTTPS entrypoint actually answers.
+if [ "$has_caddy" = 1 ] && [ -n "${DOMAIN:-}" ] && [ "$DOMAIN" != "localhost" ]; then
+  https_code=""
+  for _ in $(seq 1 20); do
+    https_code="$(curl -s -o /dev/null -w '%{http_code}' -m 10 "https://${DOMAIN}/health" 2>/dev/null || true)"
+    [ "$https_code" = "200" ] && break
+    sleep 3
+  done
+  if [ "$https_code" = "200" ]; then
+    echo "HTTPS 检查：通过 (https://${DOMAIN}/health)"
+  else
+    warn "HTTPS 未就绪（返回 ${https_code:-无响应}）。证书可能仍在签发，稍后复查："
+    warn "  docker compose logs --tail 50 caddy"
+  fi
+else
+  echo "HTTPS 检查：跳过（DOMAIN 未设置或未启用 caddy）"
 fi
 
 cat <<'TIP'

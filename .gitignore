@@ -1,6 +1,9 @@
 node_modules/
 dist/
-.env
+# Secrets. switch-domain.sh writes .env.bak.<timestamp>, which holds the PAT and
+# the client key; anything env-shaped must stay out of git except the template.
+.env*
+!.env.example
 .cache/
 *.log
 .DS_Store

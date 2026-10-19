@@ -8,8 +8,15 @@
 	# their day probing /.env, /.git/HEAD, /wp-login.php and friends; answering
 	# them here keeps them out of the app and out of its logs. Add new routes
 	# to this list or they will be rejected at the edge.
-	@unknown not path / /health /metrics /v1/*
-	respond @unknown 404
+	#
+	# /metrics is deliberately absent: it is unauthenticated and leaks model
+	# names, request volume and remaining quota. Scrape it over the compose
+	# network (http://qoder-proxy:3000/metrics) instead of the public port.
+	@unknown not path / /health /v1/*
+	handle @unknown {
+		header Content-Type application/json
+		respond `{"error":{"message":"Not found","type":"invalid_request_error"}}` 404
+	}
 
 	reverse_proxy qoder-proxy:3000 {
 		# Disable response buffering so SSE chunks reach the client immediately.
