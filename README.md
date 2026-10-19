@@ -195,8 +195,44 @@ curl -s https://你的域名/v1/chat/completions \
 | ---- | ---------------------- | -- | ------------------------ |
 | POST | `/v1/chat/completions` | ✅  | 对话，支持 `stream` 与 `tools` |
 | GET  | `/v1/models`           | ✅  | 模型目录                     |
+| GET  | `/v1/quota`            | ✅  | 上游账号剩余额度（默认缓存 60s）       |
 | GET  | `/health`              | —  | 存活探测，不触上游、不烧额度           |
-| GET  | `/metrics`             | —  | Prometheus 文本指标          |
+| GET  | `/metrics`             | —  | Prometheus 文本指标（仅 compose 内网可抓取） |
+
+### 余量检测 `GET /v1/quota`
+
+把上游 `/api/v2/quota/usage` 与 `/api/v2/user/plan` 归一化成一份快照，按订阅额度、附加额度、组织共享额度分池返回：
+
+```bash
+curl -s https://$DOMAIN/v1/quota -H "Authorization: Bearer $PROXY_API_KEY" | jq
+```
+
+```json
+{
+  "unit": "credits",
+  "plan": "Free",
+  "paidPlan": false,
+  "userType": "personal_standard",
+  "exceeded": false,
+  "periodEndAt": "9999-12-31T00:00:00.000Z",
+  "pools": [
+    { "kind": "subscription", "total": 0, "used": 0, "remaining": 0, "percentUsed": null, "unit": "credits" },
+    { "kind": "addon", "total": 400, "used": 36, "remaining": 364, "percentUsed": 9, "unit": "credits",
+      "detailUrl": "https://qoder.com.cn/account/usage" }
+  ],
+  "total": 400,
+  "used": 36,
+  "remaining": 364,
+  "percentUsed": 9,
+  "fetchedAt": "2026-10-19T06:41:12.004Z",
+  "cached": false
+}
+```
+
+- `remaining` / `total` / `used` 是**各池求和**的结果，Free 账号的订阅池为 0，真实余量在 `addOnQuota` 里。
+- 默认命中 60 秒缓存（响应头 `X-Quota-Cached: true`）；加 `?refresh=1` 强制回源，适合面板的“刷新”按钮。
+- 上游失败时返回 `502` + `code: quota_unavailable`，不会影响 `/v1/chat/completions`。
+- 同余额也会写进 Prometheus：`qoder_quota_remaining`、`qoder_quota_total`、`qoder_quota_used`、`qoder_quota_fetch_total{result}`。
 
 ## 配置
 
@@ -212,6 +248,7 @@ curl -s https://你的域名/v1/chat/completions \
 | `MODEL_FALLBACK`     | `auto`               | 未知名模型的回退档位                              |
 | `MODELS_CONFIG_PATH` | `config/models.json` | 模型映射表（显示名 → wire key）+ 别名表           |
 | `TOKEN_CACHE_PATH`   | `.cache/tokens.json` | jt/jrt 缓存（可丢，重启用 PAT 重换）                |
+| `QODER_QUOTA_TTL_MS` | `60000`              | `/v1/quota` 缓存时长，`0` 表示每次都回源            |
 | `LOG_LEVEL`          | `info`               | pino 级别                                 |
 | `DOMAIN`             | —                    | 仅 Caddyfile 使用                          |
 

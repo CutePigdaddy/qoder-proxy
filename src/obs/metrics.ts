@@ -127,6 +127,9 @@ export const metrics = {
   tokenRefresh: new Counter('qoder_token_refresh_total', 'Credential refresh attempts', ['result']),
   upstreamErrors: new Counter('qoder_upstream_errors_total', 'Upstream failures by mapped status', ['status']),
   quotaRemaining: new Gauge('qoder_quota_remaining', 'Remaining quota reported by the upstream'),
+  quotaTotal: new Gauge('qoder_quota_total', 'Total quota across all pools, as reported by the upstream'),
+  quotaUsed: new Gauge('qoder_quota_used', 'Consumed quota across all pools, as reported by the upstream'),
+  quotaFetch: new Counter('qoder_quota_fetch_total', 'Quota lookups by outcome', ['result']),
 };
 
 export function renderMetrics(): string {

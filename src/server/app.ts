@@ -5,6 +5,7 @@ import { registerChat } from './routes/chat.js';
 import { registerHealth } from './routes/health.js';
 import { registerMetrics } from './routes/metrics.js';
 import { registerModels } from './routes/models.js';
+import { registerQuota } from './routes/quota.js';
 import { registerRoot } from './routes/root.js';
 import type { Deps } from './deps.js';
 
@@ -22,6 +23,7 @@ export function createApp(deps: Deps): Hono {
   app.use('/v1/*', authMiddleware(deps.config));
   registerChat(app, deps);
   registerModels(app, deps);
+  registerQuota(app, deps);
 
   app.notFound((c) =>
     c.json(

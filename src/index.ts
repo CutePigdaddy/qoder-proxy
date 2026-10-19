@@ -8,6 +8,7 @@ import { QoderClient } from './qoder/client.js';
 import { CredentialStore } from './qoder/credentialStore.js';
 import { resolveEndpoints } from './qoder/endpoints.js';
 import { ModelCatalog } from './qoder/modelCatalog.js';
+import { QuotaService } from './qoder/quota.js';
 
 async function main(): Promise<void> {
   loadEnvFile();
@@ -49,6 +50,7 @@ async function main(): Promise<void> {
   });
   const catalog = new ModelCatalog({ endpoints, credentials });
   const client = new QoderClient({ endpoints, credentials });
+  const quota = new QuotaService({ endpoints, credentials, ttlMs: config.quotaTtlMs });
   const gate = new AdmissionGate(config.concurrency, config.queueLimit);
   const resolver = new ModelResolver({
     catalog,
@@ -70,6 +72,7 @@ async function main(): Promise<void> {
     client,
     resolver,
     gate,
+    quota,
     startTime: Date.now(),
     updateGauges,
   });

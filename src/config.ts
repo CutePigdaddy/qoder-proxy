@@ -11,6 +11,7 @@ const EnvSchema = z.object({
   BODY_LIMIT: z.coerce.number().int().positive().default(10 * 1024 * 1024),
   MODEL_FALLBACK: z.string().default('auto'),
   TOKEN_CACHE_PATH: z.string().default('.cache/tokens.json'),
+  QODER_QUOTA_TTL_MS: z.coerce.number().int().min(0).default(60_000),
   LOG_LEVEL: z.string().default('info'),
   MODELS_CONFIG_PATH: z.string().default('config/models.json'),
 });
@@ -44,6 +45,7 @@ export interface AppConfig {
   modelFallback: string;
   tokenCachePath: string;
   logLevel: string;
+  quotaTtlMs: number;
   models: ModelsConfig;
 }
 
@@ -67,6 +69,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     modelFallback: e.MODEL_FALLBACK,
     tokenCachePath: e.TOKEN_CACHE_PATH,
     logLevel: e.LOG_LEVEL,
+    quotaTtlMs: e.QODER_QUOTA_TTL_MS,
     models: loadModelsConfig(e.MODELS_CONFIG_PATH, e.MODEL_FALLBACK),
   };
 }
