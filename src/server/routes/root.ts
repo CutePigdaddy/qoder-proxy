@@ -10,7 +10,10 @@ export function registerRoot(app: Hono): void {
     c.json({
       service: 'qoder-proxy',
       status: 'ok',
-      endpoints: ['/health', '/metrics', '/v1/models', '/v1/chat/completions'],
+      // `/metrics` is deliberately absent: the edge only proxies `/`, `/health`
+      // and `/v1/*`, so advertising it here would point clients at a 404. Scrape
+      // it from inside the compose network instead.
+      endpoints: ['/health', '/v1/models', '/v1/chat/completions'],
     }),
   );
 }
