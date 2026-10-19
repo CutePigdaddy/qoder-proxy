@@ -97,7 +97,18 @@ function buildMessages(req: IRRequest): { messages: unknown[]; system: string; l
     }
   }
 
-  return { messages, system: systemChunks.join('\n\n'), lastUserText };
+  return {
+    // The gateway ignores a top-level `system` field; it only reads the
+    // conversation array. Keep the field for compatibility but carry the real
+    // instruction as a leading system message, otherwise client-side system
+    // prompts are silently discarded.
+    messages: [
+      ...(systemChunks.length > 0 ? [{ role: 'system', content: systemChunks.join('\n\n') }] : []),
+      ...messages,
+    ],
+    system: systemChunks.join('\n\n'),
+    lastUserText,
+  };
 }
 
 function parseToolArguments(raw: string, identity: string): Record<string, unknown> {
