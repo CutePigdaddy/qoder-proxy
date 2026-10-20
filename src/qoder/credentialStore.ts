@@ -110,6 +110,17 @@ export class CredentialStore {
     return this.flight.run(() => this.reload());
   }
 
+  /**
+   * Invalidate the cached job token and reload immediately, even if the token
+   * has not expired locally. Used when the upstream rejects the credential
+   * mid-flight (the token may have been revoked server-side). Concurrent
+   * callers share the same reload through the single-flight.
+   */
+  async forceRefresh(): Promise<Credentials> {
+    if (this.current) this.current = { ...this.current, expiresAt: 0 };
+    return this.flight.run(() => this.reload());
+  }
+
   private isFresh(value: Credentials | null): boolean {
     return value !== null && value.expiresAt - Date.now() > REFRESH_SKEW_MS;
   }

@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import type { IREvent, IRRequest } from '../ir/types.js';
-import { HttpError, mapUpstreamFailure } from '../util/errors.js';
+import { logger, redactSecrets } from '../obs/logger.js';
+import { CredentialRejectedError, HttpError, mapUpstreamFailure } from '../util/errors.js';
 import { encodeQoderBody } from './bodyCodec.js';
 import { buildCosyHeadersFor } from './cosySigner.js';
 import type { CredentialStore } from './credentialStore.js';
@@ -79,7 +80,46 @@ export class QoderClient {
     },
   ) {}
 
+  /**
+   * Stream one chat completion. If the upstream rejects the credential before
+   * anything has been streamed to the caller, force-refresh it and retry once:
+   * the job token can be revoked server-side while still "fresh" locally.
+   */
   async *chat(req: IRRequest, model: ResolvedModel, signal: AbortSignal): AsyncGenerator<IREvent> {
+    for (let attempt = 0; ; attempt += 1) {
+      let yielded = false;
+      try {
+        for await (const event of this.runChat(req, model, signal)) {
+          yielded = true;
+          yield event;
+        }
+        return;
+      } catch (error) {
+        if (
+          !(error instanceof CredentialRejectedError) ||
+          yielded ||
+          attempt > 0 ||
+          signal.aborted
+        ) {
+          throw error;
+        }
+        logger.warn(
+          {
+            model: model.key,
+            upstream: redactSecrets(error.upstreamBody ?? '').slice(0, 200),
+          },
+          'upstream rejected the credential; refreshing and retrying once',
+        );
+        await this.opts.credentials.forceRefresh();
+      }
+    }
+  }
+
+  private async *runChat(
+    req: IRRequest,
+    model: ResolvedModel,
+    signal: AbortSignal,
+  ): AsyncGenerator<IREvent> {
     const creds = await this.opts.credentials.get();
     const { messages, lastUserText } = buildMessages(req);
 
@@ -93,10 +133,15 @@ export class QoderClient {
         ? Math.min(req.maxTokens, model.maxOutputTokens)
         : model.maxOutputTokens;
 
-    const sessionId = stableId('qoder-session', creds.userID, model.key);
+    // Per-request nonce: identical (or retried) payloads must never reuse the
+    // same session/record ids — the upstream treats id collisions across
+    // concurrent requests as replay and rejects them with credential errors.
+    const nonce = crypto.randomUUID();
+    const sessionId = stableId('qoder-session', creds.userID, model.key, nonce);
     const recordId = stableId(
       'qoder-record',
       model.key,
+      nonce,
       JSON.stringify(messages),
       JSON.stringify(tools),
       String(maxTokens),

@@ -1,10 +1,35 @@
 import { describe, expect, it } from 'vitest';
-import { BusyError, mapUpstreamFailure } from '../../src/util/errors.js';
+import {
+  BusyError,
+  CredentialRejectedError,
+  HttpError,
+  mapUpstreamFailure,
+} from '../../src/util/errors.js';
 
 describe('mapUpstreamFailure', () => {
   it('maps an auth code to 401', () => {
     const mapped = mapUpstreamFailure({ status: 400, body: JSON.stringify({ code: 105 }) });
     expect(mapped.status).toBe(401);
+  });
+
+  it('maps auth rejections to CredentialRejectedError with the upstream body', () => {
+    const byCode = mapUpstreamFailure({ status: 200, body: JSON.stringify({ code: 105 }) });
+    expect(byCode).toBeInstanceOf(CredentialRejectedError);
+    expect(byCode).toBeInstanceOf(HttpError);
+    expect((byCode as CredentialRejectedError).upstreamBody).toContain('105');
+
+    const byStatus = mapUpstreamFailure({ status: 403, body: 'denied' });
+    expect(byStatus).toBeInstanceOf(CredentialRejectedError);
+    expect((byStatus as CredentialRejectedError).upstreamBody).toBe('denied');
+  });
+
+  it('does not tag non-auth failures as credential rejections', () => {
+    expect(mapUpstreamFailure({ status: 500, body: '' })).not.toBeInstanceOf(
+      CredentialRejectedError,
+    );
+    expect(mapUpstreamFailure({ status: 429, body: '' })).not.toBeInstanceOf(
+      CredentialRejectedError,
+    );
   });
 
   it('maps quota codes to 429', () => {

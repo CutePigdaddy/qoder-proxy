@@ -21,6 +21,21 @@ export class BusyError extends HttpError {
   }
 }
 
+/**
+ * Upstream explicitly rejected our PAT-derived job token (HTTP 401/403 or
+ * business code 105). Distinct from a client-side bad API key: callers may
+ * recover by force-refreshing the credential and retrying once.
+ */
+export class CredentialRejectedError extends HttpError {
+  constructor(
+    message: string,
+    readonly upstreamBody?: string,
+  ) {
+    super(401, message);
+    this.name = 'CredentialRejectedError';
+  }
+}
+
 export interface UpstreamFailure {
   status: number;
   body: string;
@@ -52,7 +67,10 @@ export function mapUpstreamFailure({ status, body }: UpstreamFailure): HttpError
 
   if (code !== undefined) {
     if (AUTH_ERROR_CODES.has(code)) {
-      return new HttpError(401, `Upstream rejected the credential (code ${code})`);
+      return new CredentialRejectedError(
+        `Upstream rejected the credential (code ${code})`,
+        body,
+      );
     }
     if (QUOTA_ERROR_CODES.has(code)) {
       return new HttpError(429, `Upstream quota exhausted (code ${code})`, retryAfter);
@@ -62,7 +80,9 @@ export function mapUpstreamFailure({ status, body }: UpstreamFailure): HttpError
     }
   }
 
-  if (status === 401 || status === 403) return new HttpError(401, 'Upstream rejected the credential');
+  if (status === 401 || status === 403) {
+    return new CredentialRejectedError('Upstream rejected the credential', body);
+  }
   if (status === 429) return new HttpError(429, 'Upstream rate limited', retryAfter);
   if (status >= 500) return new HttpError(502, `Upstream error ${status}`);
   return new HttpError(502, `Upstream request failed (${status})`);

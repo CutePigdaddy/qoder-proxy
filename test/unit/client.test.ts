@@ -1,0 +1,158 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { IREvent, IRRequest } from '../../src/ir/types.js';
+import { decodeQoderBody } from '../../src/qoder/bodyCodec.js';
+import { QoderClient, type ResolvedModel } from '../../src/qoder/client.js';
+import type { CredentialStore, Credentials } from '../../src/qoder/credentialStore.js';
+import type { Endpoints } from '../../src/qoder/endpoints.js';
+import { CredentialRejectedError } from '../../src/util/errors.js';
+
+const endpoints: Endpoints = {
+  gateway: 'https://gateway.example',
+  openapi: 'https://openapi.example',
+  chat: 'https://gateway.example/api/chat',
+  modelList: 'https://gateway.example/api/models',
+  exchange: 'https://openapi.example/api/v1/jobToken/exchange',
+  refresh: 'https://openapi.example/api/v1/jobToken/refresh',
+  userInfo: 'https://openapi.example/api/v1/userinfo',
+  usage: 'https://openapi.example/api/v2/quota/usage',
+};
+
+const model: ResolvedModel = {
+  key: 'qmodel_test',
+  id: 'Test-Model',
+  isReasoning: false,
+  maxOutputTokens: 4096,
+  matched: 'key',
+};
+
+const request: IRRequest = {
+  model: 'Test-Model',
+  messages: [{ role: 'user', content: 'hello' }],
+  stream: true,
+};
+
+function fakeStore() {
+  const creds: Credentials = {
+    jobToken: 'job-token',
+    jobRefreshToken: 'job-refresh',
+    userID: 'user-1',
+    name: 'tester',
+    email: 'tester@example.com',
+    machineID: 'machine-1',
+    expiresAt: Date.now() + 3_600_000,
+  };
+  const spy = {
+    snapshot: creds as Credentials | null,
+    get: vi.fn(async () => creds),
+    forceRefresh: vi.fn(async () => creds),
+  };
+  return { spy, store: spy as unknown as CredentialStore };
+}
+
+function sseFrame(inner: string, status = 200): string {
+  return `data: ${JSON.stringify({ statusCodeValue: status, body: inner })}\n`;
+}
+
+function okStream(): Response {
+  const payload =
+    sseFrame(JSON.stringify({ choices: [{ delta: { content: 'hi' } }] })) + 'data: [DONE]\n';
+  return new Response(payload, { status: 200 });
+}
+
+function rejected(): Response {
+  return new Response(JSON.stringify({ code: 105 }), { status: 401 });
+}
+
+async function collect(generator: AsyncGenerator<IREvent>): Promise<IREvent[]> {
+  const events: IREvent[] = [];
+  for await (const event of generator) events.push(event);
+  return events;
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe('QoderClient credential rejection recovery', () => {
+  it('force-refreshes the credential and retries once when rejected before streaming', async () => {
+    const { spy, store } = fakeStore();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(rejected())
+      .mockResolvedValueOnce(okStream());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new QoderClient({ endpoints, credentials: store });
+    const events = await collect(client.chat(request, model, new AbortController().signal));
+
+    expect(spy.forceRefresh).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(events.map((event) => event.type)).toEqual(['text-delta', 'done']);
+  });
+
+  it('gives up after a single retry', async () => {
+    const { spy, store } = fakeStore();
+    const fetchMock = vi.fn().mockResolvedValue(rejected());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new QoderClient({ endpoints, credentials: store });
+    const run = collect(client.chat(request, model, new AbortController().signal));
+
+    await expect(run).rejects.toBeInstanceOf(CredentialRejectedError);
+    expect(spy.forceRefresh).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('never retries once content has reached the caller', async () => {
+    const { spy, store } = fakeStore();
+    const midStreamRejection = new Response(
+      sseFrame(JSON.stringify({ choices: [{ delta: { content: 'partial' } }] })) +
+        sseFrame(JSON.stringify({ code: 105 }), 401),
+      { status: 200 },
+    );
+    const fetchMock = vi.fn().mockResolvedValue(midStreamRejection);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new QoderClient({ endpoints, credentials: store });
+    const events: IREvent[] = [];
+    const run = (async () => {
+      for await (const event of client.chat(request, model, new AbortController().signal)) {
+        events.push(event);
+      }
+    })();
+
+    await expect(run).rejects.toBeInstanceOf(CredentialRejectedError);
+    expect(spy.forceRefresh).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(events.map((event) => event.type)).toEqual(['text-delta']);
+  });
+});
+
+describe('QoderClient request identity', () => {
+  it('mints a fresh session and record id for every request', async () => {
+    const { store } = fakeStore();
+    const fetchMock = vi.fn().mockImplementation(async () => okStream());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new QoderClient({ endpoints, credentials: store });
+    await collect(client.chat(request, model, new AbortController().signal));
+    await collect(client.chat(request, model, new AbortController().signal));
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const bodies = fetchMock.mock.calls.map(([, init]) =>
+      JSON.parse(decodeQoderBody((init as RequestInit).body!.toString()).toString('utf8')) as {
+        request_id: string;
+        request_set_id: string;
+        chat_record_id: string;
+        session_id: string;
+      },
+    );
+
+    // Identical payloads must never collide on conversation identity.
+    expect(bodies[0]!.session_id).not.toBe(bodies[1]!.session_id);
+    expect(bodies[0]!.chat_record_id).not.toBe(bodies[1]!.chat_record_id);
+    expect(bodies[0]!.request_id).not.toBe(bodies[1]!.request_id);
+    // Within one request the record ids stay coherent.
+    expect(bodies[0]!.request_set_id).toBe(bodies[0]!.chat_record_id);
+  });
+});
