@@ -270,12 +270,15 @@ export class QoderClient {
         const prompt = inner.usage.prompt_tokens ?? inner.usage.input_tokens ?? 0;
         const completion = inner.usage.completion_tokens ?? inner.usage.output_tokens ?? 0;
         const details = inner.usage.prompt_tokens_details;
-        // Cache diagnostics: prefix anchors hash fixed offsets of the wire
-        // conversation. If any flips between consecutive calls in one session, the
-        // client-side chain rewrites history and prompt caching can never latch on.
+        // Cache diagnostics: a dense hash grid over the first 8 KiB of the wire
+        // conversation localises where consecutive calls diverge — the first
+        // mismatching segment kills the entire prefix match. `peek` shows the
+        // suspect zone right after the known-stable head window.
         const wire = JSON.stringify(messages);
-        const anchor = (start: number): string =>
-          crypto.createHash('sha256').update(wire.slice(start, start + 400)).digest('hex').slice(0, 8);
+        const seg = (start: number, len: number): string =>
+          crypto.createHash('sha256').update(wire.slice(start, start + len)).digest('hex').slice(0, 6);
+        const grid: string[] = [];
+        for (let i = 0; i < 32; i += 1) grid.push(seg(i * 256, 256));
         logger.info(
           {
             model: model.id,
@@ -285,9 +288,9 @@ export class QoderClient {
             cacheableTokens: details?.cacheable_tokens ?? 0,
             msgCount: messages.length,
             promptChars: wire.length,
-            prefixHead: anchor(0),
-            prefix4k: anchor(4000),
-            prefix40k: anchor(40000),
+            grid: grid.join(','),
+            deep: seg(40000, 400),
+            peek: redactSecrets(wire.slice(420, 540)),
           },
           'usage',
         );
