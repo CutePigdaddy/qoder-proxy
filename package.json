@@ -13,6 +13,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "probe": "tsx scripts/signature-probe.ts",
+    "probe:usage": "tsx scripts/usage-probe.ts",
     "matrix": "tsx scripts/model-matrix.ts"
   },
   "dependencies": {

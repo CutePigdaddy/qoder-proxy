@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { IREvent, IRRequest } from '../../src/ir/types.js';
+import { CompletionAccumulator } from '../../src/openai/nonStreamAdapter.js';
+import { toOpenAIUsage } from '../../src/openai/streamAdapter.js';
 import { decodeQoderBody } from '../../src/qoder/bodyCodec.js';
 import { QoderClient, type ResolvedModel } from '../../src/qoder/client.js';
 import type { CredentialStore, Credentials } from '../../src/qoder/credentialStore.js';
@@ -179,5 +181,55 @@ describe('QoderClient request identity', () => {
     expect(bodies[0]!.request_id).not.toBe(bodies[1]!.request_id);
     // Within one request the record ids stay coherent.
     expect(bodies[0]!.request_set_id).toBe(bodies[0]!.chat_record_id);
+  });
+});
+
+describe('usage cache accounting', () => {
+  it('passes upstream cache details through to the final usage', async () => {
+    const { store } = fakeStore();
+    // Verbatim usage shape captured 2026-10-20 from the live gateway.
+    const upstreamUsage = {
+      choices: [],
+      usage: {
+        prompt_tokens: 1703,
+        completion_tokens: 1,
+        total_tokens: 1704,
+        prompt_tokens_details: { cacheable_tokens: 0, cached_tokens: 1695 },
+      },
+    };
+    const payload =
+      sseFrame(JSON.stringify({ choices: [{ delta: { content: 'hi' } }] })) +
+      sseFrame(JSON.stringify(upstreamUsage)) +
+      'data: [DONE]\n';
+    const fetchMock = vi.fn().mockImplementation(async () => new Response(payload, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new QoderClient({ endpoints, credentials: store });
+    const events = await collect(client.chat(request, model, new AbortController().signal));
+
+    const usage = events.find((event) => event.type === 'usage');
+    expect(usage).toMatchObject({ promptTokens: 1703, cachedTokens: 1695, cacheableTokens: 0 });
+
+    // OpenAI shape keeps the details so clients can compute cache hit rate.
+    const openai = toOpenAIUsage(usage as Extract<IREvent, { type: 'usage' }>);
+    expect(openai.prompt_tokens_details).toEqual({ cached_tokens: 1695, cacheable_tokens: 0 });
+
+    // The non-stream accumulator preserves them end to end.
+    const accumulator = new CompletionAccumulator();
+    for (const event of events) accumulator.apply(event);
+    expect(accumulator.toCompletion(model.id).usage).toMatchObject({
+      prompt_tokens: 1703,
+      prompt_tokens_details: { cached_tokens: 1695, cacheable_tokens: 0 },
+    });
+  });
+
+  it('omits the details object when the upstream reports none', () => {
+    const openai = toOpenAIUsage({
+      type: 'usage',
+      promptTokens: 10,
+      completionTokens: 2,
+      totalTokens: 12,
+    });
+    expect(openai).toEqual({ prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 });
   });
 });

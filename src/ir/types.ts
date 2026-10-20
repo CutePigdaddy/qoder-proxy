@@ -71,6 +71,10 @@ export type IREvent =
       name: string;
       arguments: Record<string, unknown>;
     }
-  | { type: 'usage'; promptTokens: number; completionTokens: number; totalTokens: number }
+  | { type: 'usage'; promptTokens: number; completionTokens: number; totalTokens: number;
+      /** Prompt tokens served from the upstream prompt cache. */
+      cachedTokens?: number;
+      /** Prompt tokens written into cache on this call (i.e. cache misses). */
+      cacheableTokens?: number }
   | { type: 'done'; finishReason: IRFinishReason }
   | { type: 'error'; message: string; status?: number };

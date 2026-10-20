@@ -40,6 +40,10 @@ interface QoderInner {
     total_tokens?: number;
     input_tokens?: number;
     output_tokens?: number;
+    prompt_tokens_details?: {
+      cached_tokens?: number;
+      cacheable_tokens?: number;
+    };
   };
 }
 
@@ -265,11 +269,14 @@ export class QoderClient {
       if (inner.usage) {
         const prompt = inner.usage.prompt_tokens ?? inner.usage.input_tokens ?? 0;
         const completion = inner.usage.completion_tokens ?? inner.usage.output_tokens ?? 0;
+        const details = inner.usage.prompt_tokens_details;
         yield {
           type: 'usage',
           promptTokens: prompt,
           completionTokens: completion,
           totalTokens: inner.usage.total_tokens ?? prompt + completion,
+          cachedTokens: details?.cached_tokens,
+          cacheableTokens: details?.cacheable_tokens,
         };
       }
 

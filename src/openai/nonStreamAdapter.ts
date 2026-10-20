@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import type { IREvent, IRFinishReason } from '../ir/types.js';
-import type { OpenAIUsage } from './streamAdapter.js';
+import { toOpenAIUsage, type OpenAIUsage } from './streamAdapter.js';
 
 interface AccumulatedToolCall {
   id: string;
@@ -42,11 +42,7 @@ export class CompletionAccumulator {
         break;
       }
       case 'usage':
-        this.usage = {
-          prompt_tokens: event.promptTokens,
-          completion_tokens: event.completionTokens,
-          total_tokens: event.totalTokens,
-        };
+        this.usage = toOpenAIUsage(event);
         break;
       case 'done':
         this.finishReason = event.finishReason;

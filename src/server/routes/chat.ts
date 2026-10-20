@@ -6,7 +6,7 @@ import { redactSecrets } from '../../obs/logger.js';
 import { metrics } from '../../obs/metrics.js';
 import { CompletionAccumulator } from '../../openai/nonStreamAdapter.js';
 import { parseChatRequest } from '../../openai/requestAdapter.js';
-import { OpenAIStreamEncoder } from '../../openai/streamAdapter.js';
+import { OpenAIStreamEncoder, toOpenAIUsage, type OpenAIUsage } from '../../openai/streamAdapter.js';
 import { HttpError } from '../../util/errors.js';
 import type { Deps } from '../deps.js';
 
@@ -80,8 +80,7 @@ export function registerChat(app: Hono, deps: Deps): void {
           stream.onAbort(() => controller.abort());
           const encoder = new OpenAIStreamEncoder(model.id);
           // OpenAI sends usage only when asked, and only after finish_reason.
-          let pendingUsage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | null =
-            null;
+          let pendingUsage: OpenAIUsage | null = null;
 
           try {
             await stream.writeSSE({ data: JSON.stringify(encoder.roleFrame()) });
@@ -105,11 +104,7 @@ export function registerChat(app: Hono, deps: Deps): void {
                   });
                   break;
                 case 'usage':
-                  pendingUsage = {
-                    prompt_tokens: event.promptTokens,
-                    completion_tokens: event.completionTokens,
-                    total_tokens: event.totalTokens,
-                  };
+                  pendingUsage = toOpenAIUsage(event);
                   break;
                 case 'done':
                   await stream.writeSSE({ data: JSON.stringify(encoder.finish(event.finishReason)) });

@@ -1,10 +1,39 @@
 import crypto from 'node:crypto';
-import type { IRFinishReason } from '../ir/types.js';
+import type { IREvent, IRFinishReason } from '../ir/types.js';
 
 export interface OpenAIUsage {
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
+  /**
+   * Prompt-cache accounting. `cached_tokens` is the OpenAI-standard cache-hit
+   * count (what clients need for cache hit rate); `cacheable_tokens` is a
+   * Qoder extension counting the cache-miss portion of this call.
+   */
+  prompt_tokens_details?: {
+    cached_tokens: number;
+    cacheable_tokens?: number;
+  };
+}
+
+/** Fold an IR usage event into the OpenAI usage shape, keeping cache details. */
+export function toOpenAIUsage(event: Extract<IREvent, { type: 'usage' }>): OpenAIUsage {
+  const hasDetails = event.cachedTokens !== undefined || event.cacheableTokens !== undefined;
+  return {
+    prompt_tokens: event.promptTokens,
+    completion_tokens: event.completionTokens,
+    total_tokens: event.totalTokens,
+    ...(hasDetails
+      ? {
+          prompt_tokens_details: {
+            cached_tokens: event.cachedTokens ?? 0,
+            ...(event.cacheableTokens !== undefined
+              ? { cacheable_tokens: event.cacheableTokens }
+              : {}),
+          },
+        }
+      : {}),
+  };
 }
 
 interface ChunkChoice {
