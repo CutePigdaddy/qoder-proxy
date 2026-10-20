@@ -1,5 +1,18 @@
 import type { IRMessage, IRRequest } from '../ir/types.js';
 
+export type TokenMarkerMode = 'move' | 'strip' | 'keep';
+
+/**
+ * Claude Code's `totalTokensReminder` appends a `<total_tokens>N tokens
+ * left</total_tokens>` line to the system prompt after every tool result and
+ * user turn. The upstream prompt cache matches prefixes byte-exactly, so a
+ * growing system tail voids every cache entry past the first marker. We
+ * neutralise it here: strip the markers from the system prompt and (in the
+ * default `move` mode) re-attach the latest one to the tail of the current
+ * turn so the model still sees the budget.
+ */
+const TOKEN_MARKER_RE = /<total_tokens>[\s\S]*?<\/total_tokens>/g;
+
 export interface BuiltMessages {
   /** Wire payload: a leading system message (if any) followed by the conversation. */
   messages: unknown[];
@@ -26,7 +39,11 @@ function contentOf(message: IRMessage): unknown {
  * `role: "system"` message, otherwise client-side instructions are silently
  * dropped and the model answers without them.
  */
-export function buildMessages(req: IRRequest): BuiltMessages {
+export function buildMessages(
+  req: IRRequest,
+  opts?: { tokenMarkerMode?: TokenMarkerMode },
+): BuiltMessages {
+  const mode: TokenMarkerMode = opts?.tokenMarkerMode ?? 'move';
   const systemChunks: string[] = [];
   if (req.system) systemChunks.push(req.system);
 
@@ -64,7 +81,36 @@ export function buildMessages(req: IRRequest): BuiltMessages {
     }
   }
 
-  const system = systemChunks.join('\n\n');
+  let system = systemChunks.join('\n\n');
+
+  // Neutralise totalTokensReminder markers so the system prompt stays
+  // byte-stable across turns and the whole history remains cacheable.
+  const markers = mode === 'keep' ? [] : (system.match(TOKEN_MARKER_RE) ?? []);
+  if (markers.length > 0) {
+    system = system.replace(TOKEN_MARKER_RE, '').replace(/\n{3,}/g, '\n\n').trimEnd();
+    if (mode === 'move') {
+      const latest = markers[markers.length - 1];
+      for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const message = messages[i] as { role?: string; content?: unknown };
+        if (message.role !== 'user' && message.role !== 'tool') continue;
+        if (typeof message.content === 'string') {
+          message.content = `${message.content}\n\n${latest}`;
+        } else if (Array.isArray(message.content)) {
+          const parts = message.content as Array<{ type?: string; text?: string }>;
+          const lastText = [...parts].reverse().find((part) => part.type === 'text');
+          if (lastText && typeof lastText.text === 'string') {
+            lastText.text = `${lastText.text}\n\n${latest}`;
+          } else {
+            parts.push({ type: 'text', text: latest });
+          }
+        } else {
+          message.content = latest;
+        }
+        break;
+      }
+    }
+  }
+
   return {
     messages: [...(system ? [{ role: 'system', content: system }] : []), ...messages],
     system,

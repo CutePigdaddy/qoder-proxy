@@ -250,6 +250,7 @@ curl -s https://$DOMAIN/v1/quota -H "Authorization: Bearer $PROXY_API_KEY" | jq
 | `TOKEN_CACHE_PATH`   | `.cache/tokens.json` | jt/jrt 缓存（可丢，重启用 PAT 重换）                |
 | `QODER_QUOTA_TTL_MS` | `60000`              | `/v1/quota` 缓存时长，`0` 表示每次都回源            |
 | `LOG_LEVEL`          | `info`               | pino 级别                                 |
+| `TOKEN_MARKER_MODE`  | `move`               | Claude Code `<total_tokens>` 标记处理：`move` 从 system 剥离并把最新一条挪到本轮末条 user/tool 消息（缓存稳定+模型可见预算）；`strip` 直接删除；`keep` 原样透传（仅用于对照实验） |
 | `DOMAIN`             | —                    | 仅 Caddyfile 使用                          |
 
 上游主机可用 `QODER_CN_BASE_URL` / `QODER_CN_OPENAPI_URL` 覆盖（企业 VPC 或测试环境）。

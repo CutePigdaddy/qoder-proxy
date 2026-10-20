@@ -49,7 +49,11 @@ async function main(): Promise<void> {
     endpoints,
   });
   const catalog = new ModelCatalog({ endpoints, credentials });
-  const client = new QoderClient({ endpoints, credentials });
+  const client = new QoderClient({
+    endpoints,
+    credentials,
+    tokenMarkerMode: config.tokenMarkerMode,
+  });
   const quota = new QuotaService({ endpoints, credentials, ttlMs: config.quotaTtlMs });
   const gate = new AdmissionGate(config.concurrency, config.queueLimit);
   const resolver = new ModelResolver({

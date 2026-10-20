@@ -6,7 +6,7 @@ import { encodeQoderBody } from './bodyCodec.js';
 import { buildCosyHeadersFor } from './cosySigner.js';
 import type { CredentialStore } from './credentialStore.js';
 import type { Endpoints } from './endpoints.js';
-import { buildMessages } from './messageBuilder.js';
+import { buildMessages, type TokenMarkerMode } from './messageBuilder.js';
 import { decodeQoderSse } from './sseDecoder.js';
 
 export interface ResolvedModel {
@@ -98,6 +98,7 @@ export class QoderClient {
     private readonly opts: {
       endpoints: Endpoints;
       credentials: CredentialStore;
+      tokenMarkerMode?: TokenMarkerMode;
     },
   ) {}
 
@@ -158,7 +159,9 @@ export class QoderClient {
     signal: AbortSignal,
   ): AsyncGenerator<IREvent> {
     const creds = await this.opts.credentials.get();
-    const { messages, lastUserText } = buildMessages(req);
+    const { messages, lastUserText } = buildMessages(req, {
+      tokenMarkerMode: this.opts.tokenMarkerMode,
+    });
 
     const tools = (req.tools ?? [])
       .map((tool) => ({

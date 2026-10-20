@@ -16,6 +16,13 @@ const EnvSchema = z.object({
   QODER_QUOTA_TTL_MS: z.coerce.number().int().min(0).default(60_000),
   LOG_LEVEL: z.string().default('info'),
   MODELS_CONFIG_PATH: z.string().default('config/models.json'),
+  // How to neutralise Claude Code's <total_tokens> markers, which otherwise
+  // rewrite the system prompt tail every turn and void the prompt cache:
+  //   move   - strip from system, re-attach the latest marker to the last
+  //            user/tool message (default: cacheable + model sees the budget)
+  //   strip  - remove them entirely
+  //   keep   - pass through unchanged (for A/B comparison only)
+  TOKEN_MARKER_MODE: z.enum(['move', 'strip', 'keep']).default('move'),
 });
 
 export interface ModelMapping {
@@ -48,6 +55,7 @@ export interface AppConfig {
   tokenCachePath: string;
   logLevel: string;
   quotaTtlMs: number;
+  tokenMarkerMode: 'move' | 'strip' | 'keep';
   models: ModelsConfig;
 }
 
@@ -72,6 +80,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     tokenCachePath: e.TOKEN_CACHE_PATH,
     logLevel: e.LOG_LEVEL,
     quotaTtlMs: e.QODER_QUOTA_TTL_MS,
+    tokenMarkerMode: e.TOKEN_MARKER_MODE,
     models: loadModelsConfig(e.MODELS_CONFIG_PATH, e.MODEL_FALLBACK),
   };
 }

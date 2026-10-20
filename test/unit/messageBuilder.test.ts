@@ -113,3 +113,107 @@ describe('buildMessages', () => {
     });
   });
 });
+
+describe('buildMessages totalTokensReminder markers', () => {
+  const systemWithMarkers =
+    'stable head\n\n<total_tokens>15000000 tokens left</total_tokens>\n\n' +
+    '<total_tokens>14990448 tokens left</total_tokens>';
+
+  it('move: strips markers from system and appends the latest to the last tool message', () => {
+    const built = buildMessages(
+      {
+        model: 'auto',
+        system: systemWithMarkers,
+        messages: [
+          { role: 'user', content: 'run it' },
+          { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'Bash', arguments: {} }] },
+          { role: 'tool', content: 'done', toolCallId: 'c1' },
+        ],
+        stream: false,
+        includeUsage: false,
+      },
+      { tokenMarkerMode: 'move' },
+    );
+
+    expect((built.messages[0] as { content: string }).content).toBe('stable head');
+    expect(built.messages[3]).toEqual({
+      role: 'tool',
+      tool_call_id: 'c1',
+      content: 'done\n\n<total_tokens>14990448 tokens left</total_tokens>',
+    });
+  });
+
+  it('move: appends to the last text part of a user message with parts', () => {
+    const built = buildMessages(
+      {
+        model: 'auto',
+        system: systemWithMarkers,
+        messages: [
+          {
+            role: 'user',
+            content: '',
+            parts: [{ type: 'text', text: 'hello' }],
+          },
+        ],
+        stream: false,
+        includeUsage: false,
+      },
+      { tokenMarkerMode: 'move' },
+    );
+
+    expect(built.messages[1]).toEqual({
+      role: 'user',
+      content: [{ type: 'text', text: 'hello\n\n<total_tokens>14990448 tokens left</total_tokens>' }],
+    });
+  });
+
+  it('strip: removes markers without re-attaching them', () => {
+    const built = buildMessages(
+      {
+        model: 'auto',
+        system: systemWithMarkers,
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: false,
+        includeUsage: false,
+      },
+      { tokenMarkerMode: 'strip' },
+    );
+
+    expect((built.messages[0] as { content: string }).content).toBe('stable head');
+    expect(built.messages[1]).toEqual({ role: 'user', content: 'hi' });
+  });
+
+  it('keep: passes markers through unchanged', () => {
+    const built = buildMessages(
+      {
+        model: 'auto',
+        system: systemWithMarkers,
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: false,
+        includeUsage: false,
+      },
+      { tokenMarkerMode: 'keep' },
+    );
+
+    expect((built.messages[0] as { content: string }).content).toBe(systemWithMarkers);
+    expect(built.messages[1]).toEqual({ role: 'user', content: 'hi' });
+  });
+
+  it('leaves marker-free prompts byte-identical in every mode', () => {
+    for (const tokenMarkerMode of ['move', 'strip', 'keep'] as const) {
+      const built = buildMessages(
+        {
+          model: 'auto',
+          system: 'stable head',
+          messages: [{ role: 'user', content: 'hi' }],
+          stream: false,
+          includeUsage: false,
+        },
+        { tokenMarkerMode },
+      );
+
+      expect((built.messages[0] as { content: string }).content).toBe('stable head');
+      expect(built.messages[1]).toEqual({ role: 'user', content: 'hi' });
+    }
+  });
+});
