@@ -307,6 +307,10 @@ export class QoderClient {
         const toolsJson = JSON.stringify(tools);
         const tgrid: string[] = [];
         for (let i = 0; i < 8; i += 1) tgrid.push(hash(toolsJson.slice(i * 256, i * 256 + 256)));
+        // Fine grid over the 128-192 KiB band where consecutive loop requests
+        // first diverge; raw peeks reveal the volatile field itself.
+        const mgrid: string[] = [];
+        for (let i = 0; i < 32; i += 1) mgrid.push(seg(131072 + i * 2048, 2048));
         logger.info(
           {
             model: model.id,
@@ -322,7 +326,11 @@ export class QoderClient {
             grid: grid.join(','),
             far: far.join(','),
             tgrid: tgrid.join(','),
+            mgrid: mgrid.join(','),
             peek: redactSecrets(wire.slice(420, 540)),
+            peekMid: [130500, 133000, 138000]
+              .map((pos) => redactSecrets(wire.slice(pos, pos + 220)))
+              .join(' ||| '),
           },
           'usage',
         );
