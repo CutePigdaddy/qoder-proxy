@@ -26,6 +26,23 @@ interface ToolCallDelta {
   function?: { name?: string; arguments?: string };
 }
 
+/**
+ * Rebuild a value with object keys sorted and tool entries ordered by name,
+ * so the tool block serialises byte-identically regardless of client-side
+ * key order or array order. The upstream renders tools at the head of the
+ * prompt — any serialisation jitter there voids the entire prompt cache.
+ */
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value !== null && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(record).sort()) out[key] = canonicalize(record[key]);
+    return out;
+  }
+  return value;
+}
+
 interface QoderDelta {
   content?: string;
   reasoning_content?: string;
@@ -143,10 +160,16 @@ export class QoderClient {
     const creds = await this.opts.credentials.get();
     const { messages, lastUserText } = buildMessages(req);
 
-    const tools = (req.tools ?? []).map((tool) => ({
-      type: 'function',
-      function: { name: tool.name, description: tool.description, parameters: tool.parameters },
-    }));
+    const tools = (req.tools ?? [])
+      .map((tool) => ({
+        type: 'function',
+        function: { name: tool.name, description: tool.description, parameters: tool.parameters },
+      }))
+      .sort((a, b) => (a.function.name < b.function.name ? -1 : a.function.name > b.function.name ? 1 : 0))
+      .map((tool) => canonicalize(tool)) as Array<{
+      type: string;
+      function: { name: string; description?: string; parameters?: unknown };
+    }>;
 
     const maxTokens =
       req.maxTokens && req.maxTokens > 0
@@ -288,6 +311,13 @@ export class QoderClient {
             cacheableTokens: details?.cacheable_tokens ?? 0,
             msgCount: messages.length,
             promptChars: wire.length,
+            toolsN: tools.length,
+            toolsNameHash: crypto
+              .createHash('sha256')
+              .update(tools.map((tool) => tool.function.name).join(','))
+              .digest('hex')
+              .slice(0, 8),
+            toolsFullHash: crypto.createHash('sha256').update(JSON.stringify(tools)).digest('hex').slice(0, 8),
             grid: grid.join(','),
             deep: seg(40000, 400),
             peek: redactSecrets(wire.slice(420, 540)),
