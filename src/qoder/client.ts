@@ -298,10 +298,15 @@ export class QoderClient {
         // mismatching segment kills the entire prefix match. `peek` shows the
         // suspect zone right after the known-stable head window.
         const wire = JSON.stringify(messages);
-        const seg = (start: number, len: number): string =>
-          crypto.createHash('sha256').update(wire.slice(start, start + len)).digest('hex').slice(0, 6);
+        const hash = (text: string): string => crypto.createHash('sha256').update(text).digest('hex').slice(0, 6);
+        const seg = (start: number, len: number): string => hash(wire.slice(start, start + len));
         const grid: string[] = [];
-        for (let i = 0; i < 32; i += 1) grid.push(seg(i * 256, 256));
+        for (let i = 0; i < 64; i += 1) grid.push(seg(i * 1024, 1024)); // dense 0-64 KiB
+        const far: string[] = [];
+        for (let i = 0; i < 40; i += 1) far.push(seg(65536 + i * 32768, 32768)); // coarse tail
+        const toolsJson = JSON.stringify(tools);
+        const tgrid: string[] = [];
+        for (let i = 0; i < 8; i += 1) tgrid.push(hash(toolsJson.slice(i * 256, i * 256 + 256)));
         logger.info(
           {
             model: model.id,
@@ -312,14 +317,11 @@ export class QoderClient {
             msgCount: messages.length,
             promptChars: wire.length,
             toolsN: tools.length,
-            toolsNameHash: crypto
-              .createHash('sha256')
-              .update(tools.map((tool) => tool.function.name).join(','))
-              .digest('hex')
-              .slice(0, 8),
-            toolsFullHash: crypto.createHash('sha256').update(JSON.stringify(tools)).digest('hex').slice(0, 8),
+            toolsNameHash: hash(tools.map((tool) => tool.function.name).join(',')),
+            toolsFullHash: hash(toolsJson),
             grid: grid.join(','),
-            deep: seg(40000, 400),
+            far: far.join(','),
+            tgrid: tgrid.join(','),
             peek: redactSecrets(wire.slice(420, 540)),
           },
           'usage',
