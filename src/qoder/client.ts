@@ -270,6 +270,23 @@ export class QoderClient {
         const prompt = inner.usage.prompt_tokens ?? inner.usage.input_tokens ?? 0;
         const completion = inner.usage.completion_tokens ?? inner.usage.output_tokens ?? 0;
         const details = inner.usage.prompt_tokens_details;
+        // Cache diagnostics: prefixHead hashes the head of the wire conversation.
+        // If it flips between consecutive calls in one session, the client-side
+        // chain rewrites history and prompt caching can never latch on.
+        const wire = JSON.stringify(messages);
+        logger.info(
+          {
+            model: model.id,
+            promptTokens: prompt,
+            completionTokens: completion,
+            cachedTokens: details?.cached_tokens ?? 0,
+            cacheableTokens: details?.cacheable_tokens ?? 0,
+            msgCount: messages.length,
+            promptChars: wire.length,
+            prefixHead: crypto.createHash('sha256').update(wire.slice(0, 400)).digest('hex').slice(0, 8),
+          },
+          'usage',
+        );
         yield {
           type: 'usage',
           promptTokens: prompt,
