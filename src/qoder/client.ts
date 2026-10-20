@@ -270,10 +270,12 @@ export class QoderClient {
         const prompt = inner.usage.prompt_tokens ?? inner.usage.input_tokens ?? 0;
         const completion = inner.usage.completion_tokens ?? inner.usage.output_tokens ?? 0;
         const details = inner.usage.prompt_tokens_details;
-        // Cache diagnostics: prefixHead hashes the head of the wire conversation.
-        // If it flips between consecutive calls in one session, the client-side
-        // chain rewrites history and prompt caching can never latch on.
+        // Cache diagnostics: prefix anchors hash fixed offsets of the wire
+        // conversation. If any flips between consecutive calls in one session, the
+        // client-side chain rewrites history and prompt caching can never latch on.
         const wire = JSON.stringify(messages);
+        const anchor = (start: number): string =>
+          crypto.createHash('sha256').update(wire.slice(start, start + 400)).digest('hex').slice(0, 8);
         logger.info(
           {
             model: model.id,
@@ -283,7 +285,9 @@ export class QoderClient {
             cacheableTokens: details?.cacheable_tokens ?? 0,
             msgCount: messages.length,
             promptChars: wire.length,
-            prefixHead: crypto.createHash('sha256').update(wire.slice(0, 400)).digest('hex').slice(0, 8),
+            prefixHead: anchor(0),
+            prefix4k: anchor(4000),
+            prefix40k: anchor(40000),
           },
           'usage',
         );

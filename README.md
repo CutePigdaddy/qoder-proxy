@@ -243,7 +243,7 @@ curl -s https://$DOMAIN/v1/quota -H "Authorization: Bearer $PROXY_API_KEY" | jq
 | `PORT`               | `3000`               | 监听端口                                    |
 | `CONCURRENCY`        | `3`                  | 同时进上游的请求上限                              |
 | `QUEUE_LIMIT`        | `20`                 | 等待队列上限，占满即 429 + `Retry-After`          |
-| `REQUEST_TIMEOUT_MS` | `120000`             | 单请求总超时                                  |
+| `REQUEST_TIMEOUT_MS` | `600000`             | 单请求总超时（巨型上下文 prefill 可超 2 分钟，勿设太小）                    |
 | `BODY_LIMIT`         | `10485760`           | 请求体上限（10 MB）                            |
 | `MODEL_FALLBACK`     | `auto`               | 未知名模型的回退档位                              |
 | `MODELS_CONFIG_PATH` | `config/models.json` | 模型映射表（显示名 → wire key）+ 别名表           |

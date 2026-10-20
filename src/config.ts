@@ -7,7 +7,9 @@ const EnvSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
   CONCURRENCY: z.coerce.number().int().positive().default(3),
   QUEUE_LIMIT: z.coerce.number().int().min(0).default(20),
-  REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
+  // Total wall clock per request. Large-context prompts (300k+ tokens) can spend
+  // minutes in upstream prefill alone; keep this at or below the client's own budget.
+  REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(600_000),
   BODY_LIMIT: z.coerce.number().int().positive().default(10 * 1024 * 1024),
   MODEL_FALLBACK: z.string().default('auto'),
   TOKEN_CACHE_PATH: z.string().default('.cache/tokens.json'),
