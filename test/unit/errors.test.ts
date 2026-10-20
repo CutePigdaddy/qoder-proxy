@@ -32,6 +32,46 @@ describe('mapUpstreamFailure', () => {
     );
   });
 
+  it('unwraps nested business codes hidden in stringified messages', () => {
+    // Verbatim shape captured 2026-10-20: the outer code echoes the HTTP
+    // status as a string; the real busy code and back-off live two levels deep.
+    const body = JSON.stringify({
+      code: '403',
+      message: JSON.stringify({
+        code: '10605',
+        message: JSON.stringify({
+          isQueued: false,
+          modelKey: 'dfmodel',
+          queueCount: 0,
+          queueType: 'p3',
+          retryAfterSeconds: 2,
+        }),
+      }),
+    });
+    const mapped = mapUpstreamFailure({ status: 403, body });
+    expect(mapped.status).toBe(503);
+    expect(mapped.retryAfter).toBe(2);
+    expect(mapped).not.toBeInstanceOf(CredentialRejectedError);
+    expect(mapped.message).toContain('10605');
+  });
+
+  it('accepts numeric-string codes at the top level', () => {
+    const mapped = mapUpstreamFailure({ status: 200, body: JSON.stringify({ code: '105' }) });
+    expect(mapped).toBeInstanceOf(CredentialRejectedError);
+    expect(mapped.status).toBe(401);
+  });
+
+  it('prefers a known business code over the outer status echo', () => {
+    const body = JSON.stringify({
+      code: '401',
+      message: JSON.stringify({ code: '110', retryAfterSeconds: 5 }),
+    });
+    const mapped = mapUpstreamFailure({ status: 401, body });
+    expect(mapped.status).toBe(429);
+    expect(mapped.retryAfter).toBe(5);
+    expect(mapped).not.toBeInstanceOf(CredentialRejectedError);
+  });
+
   it('maps quota codes to 429', () => {
     for (const code of [110, 112, 119, 122]) {
       const mapped = mapUpstreamFailure({ status: 200, body: JSON.stringify({ code }) });

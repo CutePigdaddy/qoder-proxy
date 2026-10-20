@@ -95,22 +95,38 @@ export class QoderClient {
         }
         return;
       } catch (error) {
-        if (
-          !(error instanceof CredentialRejectedError) ||
-          yielded ||
-          attempt > 0 ||
-          signal.aborted
-        ) {
-          throw error;
+        if (yielded || attempt > 0 || signal.aborted) throw error;
+
+        if (error instanceof CredentialRejectedError) {
+          logger.warn(
+            {
+              model: model.key,
+              upstream: redactSecrets(error.upstreamBody ?? '').slice(0, 200),
+            },
+            'upstream rejected the credential; refreshing and retrying once',
+          );
+          await this.opts.credentials.forceRefresh();
+          continue;
         }
-        logger.warn(
-          {
-            model: model.key,
-            upstream: redactSecrets(error.upstreamBody ?? '').slice(0, 200),
-          },
-          'upstream rejected the credential; refreshing and retrying once',
-        );
-        await this.opts.credentials.forceRefresh();
+
+        // Short upstream back-off (queue pressure): honour it once when
+        // nothing has streamed yet instead of surfacing a failure.
+        if (
+          error instanceof HttpError &&
+          error.status === 503 &&
+          error.retryAfter !== undefined &&
+          error.retryAfter <= 3
+        ) {
+          const waitMs = error.retryAfter * 1000;
+          logger.warn(
+            { model: model.key, waitMs },
+            'upstream busy before streaming; waiting and retrying once',
+          );
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
+          continue;
+        }
+
+        throw error;
       }
     }
   }

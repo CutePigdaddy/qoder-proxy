@@ -103,6 +103,31 @@ describe('QoderClient credential rejection recovery', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it('honours a short upstream back-off before failing', async () => {
+    const { spy, store } = fakeStore();
+    // Verbatim busy shape captured 2026-10-20, trimmed to the parsed fields.
+    const busyBody = JSON.stringify({
+      code: '403',
+      message: JSON.stringify({
+        code: '10605',
+        message: JSON.stringify({ isQueued: false, retryAfterSeconds: 1 }),
+      }),
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(sseFrame(busyBody, 403), { status: 200 }))
+      .mockImplementation(async () => okStream());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new QoderClient({ endpoints, credentials: store });
+    const events = await collect(client.chat(request, model, new AbortController().signal));
+
+    expect(events.map((event) => event.type)).toEqual(['text-delta', 'done']);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // Busy pressure is not a credential problem: no token churn.
+    expect(spy.forceRefresh).not.toHaveBeenCalled();
+  });
+
   it('never retries once content has reached the caller', async () => {
     const { spy, store } = fakeStore();
     const midStreamRejection = new Response(
