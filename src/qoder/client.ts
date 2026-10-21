@@ -103,12 +103,17 @@ export class QoderClient {
   ) {}
 
   /**
-   * Stream one chat completion. If the upstream rejects the credential before
-   * anything has been streamed to the caller, force-refresh it and retry once:
-   * the job token can be revoked server-side while still "fresh" locally.
+   * Stream one chat completion. Before anything has been streamed to the
+   * caller, absorb transient upstream refusals internally instead of surfacing
+   * them: credential rejections trigger one forced refresh, rate limiting and
+   * queue pressure (429/503) are retried after a short back-off (up to twice,
+   * capped at 30s per wait). Clients that retry on 429 in a tight loop would
+   * otherwise hammer a rate-limited upstream into permanent rejection.
    */
   async *chat(req: IRRequest, model: ResolvedModel, signal: AbortSignal): AsyncGenerator<IREvent> {
-    for (let attempt = 0; ; attempt += 1) {
+    let credentialRetries = 0;
+    let busyRetries = 0;
+    for (;;) {
       let yielded = false;
       try {
         for await (const event of this.runChat(req, model, signal)) {
@@ -117,9 +122,10 @@ export class QoderClient {
         }
         return;
       } catch (error) {
-        if (yielded || attempt > 0 || signal.aborted) throw error;
+        if (yielded || signal.aborted) throw error;
 
-        if (error instanceof CredentialRejectedError) {
+        if (error instanceof CredentialRejectedError && credentialRetries < 1) {
+          credentialRetries += 1;
           logger.warn(
             {
               model: model.key,
@@ -131,18 +137,16 @@ export class QoderClient {
           continue;
         }
 
-        // Short upstream back-off (queue pressure): honour it once when
-        // nothing has streamed yet instead of surfacing a failure.
         if (
           error instanceof HttpError &&
-          error.status === 503 &&
-          error.retryAfter !== undefined &&
-          error.retryAfter <= 3
+          (error.status === 429 || error.status === 503) &&
+          busyRetries < 2
         ) {
-          const waitMs = error.retryAfter * 1000;
+          busyRetries += 1;
+          const waitMs = Math.min((error.retryAfter ?? busyRetries * 2) * 1000, 30_000);
           logger.warn(
-            { model: model.key, waitMs },
-            'upstream busy before streaming; waiting and retrying once',
+            { model: model.key, status: error.status, waitMs, busyRetries },
+            'upstream rate limited or busy before streaming; backing off and retrying',
           );
           await new Promise((resolve) => setTimeout(resolve, waitMs));
           continue;

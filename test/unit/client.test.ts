@@ -130,6 +130,39 @@ describe('QoderClient credential rejection recovery', () => {
     expect(spy.forceRefresh).not.toHaveBeenCalled();
   });
 
+  it('retries rate limiting with back-off before surfacing 429', async () => {
+    const { spy, store } = fakeStore();
+    const rateLimited = (): Response =>
+      new Response(JSON.stringify({ retryAfterSeconds: 1 }), { status: 429 });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(rateLimited())
+      .mockResolvedValueOnce(rateLimited())
+      .mockImplementation(async () => okStream());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new QoderClient({ endpoints, credentials: store });
+    const events = await collect(client.chat(request, model, new AbortController().signal));
+
+    expect(events.map((event) => event.type)).toEqual(['text-delta', 'done']);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(spy.forceRefresh).not.toHaveBeenCalled();
+  });
+
+  it('gives up after two rate-limit back-offs', async () => {
+    const { store } = fakeStore();
+    const rateLimited = (): Response =>
+      new Response(JSON.stringify({ retryAfterSeconds: 1 }), { status: 429 });
+    const fetchMock = vi.fn().mockImplementation(async () => rateLimited());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new QoderClient({ endpoints, credentials: store });
+    const run = collect(client.chat(request, model, new AbortController().signal));
+
+    await expect(run).rejects.toMatchObject({ status: 429 });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
   it('never retries once content has reached the caller', async () => {
     const { spy, store } = fakeStore();
     const midStreamRejection = new Response(
