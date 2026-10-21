@@ -28,9 +28,10 @@ export function dateTime(ts: number): string {
   return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-/** 命中率分档，供进度条与徽标取色：>=90 优，>=70 良，其余关注。 */
+/** 命中率分档：>=85 优，>=60 良，其余关注。阈值偏高是有意的——
+ *  长上下文会话的缓存命中率正常就在 90% 以上，60% 已经说明前缀在失配。 */
 export function hitTone(rate: number): 'good' | 'fair' | 'poor' {
-  if (rate >= 90) return 'good';
-  if (rate >= 70) return 'fair';
+  if (rate >= 85) return 'good';
+  if (rate >= 60) return 'fair';
   return 'poor';
 }

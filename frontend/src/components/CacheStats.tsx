@@ -9,6 +9,9 @@ interface Props {
   refreshing: boolean;
 }
 
+/** 样本少时命中率波动极大，标出来免得把一次缓存写入读成「缓存坏了」。 */
+const SMALL_SAMPLE = 10;
+
 /**
  * 缓存命中率：左侧大数字回答「现在多好」，右侧趋势回答「在变好还是变差」，
  * 下方分模型回答「哪里还差」。刷新入口就放在本模块头部，避免跨区域操作。
@@ -17,6 +20,8 @@ const CacheStats: React.FC<Props> = ({ cache, byModel, onRefresh, refreshing }) 
   const trendRows = cache.trend.map((p) => ({ label: p.label ?? '', rate: p.value }));
   const billable = cache.cacheHitTokens + cache.inputTokens;
   const tone = hitTone(cache.hitRate);
+  const samples = byModel.reduce((n, m) => n + m.requests, 0);
+  const thin = samples < SMALL_SAMPLE;
 
   return (
     <section className="panel">
@@ -35,9 +40,12 @@ const CacheStats: React.FC<Props> = ({ cache, byModel, onRefresh, refreshing }) 
 
       <div className="cache-body">
         <div className="cache-hero">
-          <span className={`cache-number tone-${tone}`}>{percent(cache.hitRate)}</span>
+          <span className={`cache-number tone-${thin ? 'neutral' : tone}`}>{percent(cache.hitRate)}</span>
           <div className="meter" role="img" aria-label={`缓存命中率 ${percent(cache.hitRate)}`}>
-            <span className={`meter-fill tone-${tone}`} style={{ width: `${Math.min(cache.hitRate, 100)}%` }} />
+            <span
+              className={`meter-fill tone-${thin ? 'neutral' : tone}`}
+              style={{ width: `${Math.min(cache.hitRate, 100)}%` }}
+            />
           </div>
           <dl className="cache-facts">
             <div>
@@ -57,11 +65,15 @@ const CacheStats: React.FC<Props> = ({ cache, byModel, onRefresh, refreshing }) 
               <dd>{compact(billable)}</dd>
             </div>
           </dl>
+          {thin && <p className="cache-note">样本较少（{samples} 次请求），命中率仅供参考</p>}
         </div>
 
         <div className="cache-trend">
           <span className="sub-label">命中率趋势</span>
-          <ResponsiveContainer width="100%" height={180}>
+          {trendRows.length < 2 ? (
+            <div className="chart-placeholder">数据点不足，再跑几次请求后显示趋势</div>
+          ) : (
+            <ResponsiveContainer width="100%" height={180}>
             <LineChart data={trendRows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
               <CartesianGrid stroke="#eef0f4" vertical={false} />
               <XAxis
@@ -107,6 +119,7 @@ const CacheStats: React.FC<Props> = ({ cache, byModel, onRefresh, refreshing }) 
               />
             </LineChart>
           </ResponsiveContainer>
+          )}
         </div>
       </div>
 

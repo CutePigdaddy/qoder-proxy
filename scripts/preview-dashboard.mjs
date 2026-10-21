@@ -97,7 +97,28 @@ function dashboard(hours) {
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
 
-  if (url.pathname === '/v1/usage/dashboard') {
+  if (url.pathname.startsWith('/v1/')) {
+    // 可选：直连真实网关看真数据（PREVIEW_API_URL + PREVIEW_API_KEY）。
+    // 没配就用内置 mock，方便纯前端调试。
+    const upstream = process.env.PREVIEW_API_URL;
+    if (upstream) {
+      try {
+        const target = new URL(url.pathname + url.search, upstream);
+        const reply = await fetch(target, {
+          headers: { Authorization: `Bearer ${process.env.PREVIEW_API_KEY ?? ''}` },
+        });
+        const body = Buffer.from(await reply.arrayBuffer());
+        res.writeHead(reply.status, {
+          'Content-Type': reply.headers.get('content-type') ?? 'application/json',
+        });
+        res.end(body);
+      } catch (error) {
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: String(error) }));
+      }
+      return;
+    }
+
     const hours = Number(url.searchParams.get('hours') ?? 24);
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(dashboard(hours)));
