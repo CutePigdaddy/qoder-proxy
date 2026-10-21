@@ -75,7 +75,7 @@ export interface ModelUsage {
 export interface ModelEntry {
   id: string;
   upstream_model: string;
-  upstream_display_name: string;
+  upstream_display_name: string | null;
   context_window: number | null;
   context_windows: number[];
   max_output_tokens: number;

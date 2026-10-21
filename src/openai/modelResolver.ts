@@ -14,8 +14,8 @@ export interface ModelListEntry {
   displayName: string;
   /** Upstream wire key this id forwards to. */
   upstream: string;
-  /** 上游自己的显示名；与 id 不同说明配置里改过名（例如 MiniMax） */
-  upstreamDisplayName: string;
+  /** 上游自己的显示名；null 表示上游目录里没有这个 key（仅配置），名字未知 */
+  upstreamDisplayName: string | null;
   /** 单次请求可输入的最大 token；上游没给就为 null */
   contextWindow: number | null;
   /** 上游 context_config 暴露的档位（升序） */
@@ -80,7 +80,7 @@ function toListEntry(
     id,
     displayName: id,
     upstream,
-    upstreamDisplayName: entry?.displayName ?? upstream,
+    upstreamDisplayName: entry?.displayName ?? null,
     contextWindow: entry?.maxInputTokens ?? null,
     contextWindows: entry?.contextWindows ?? [],
     maxOutputTokens: mapping?.maxOutputTokens ?? entry?.maxOutputTokens ?? DEFAULT_MAX_OUTPUT,

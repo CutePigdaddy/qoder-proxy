@@ -95,7 +95,7 @@ const ModelTable: React.FC<Props> = ({ models, loading, refreshing, error, hours
     const needle = query.trim().toLowerCase();
     const filtered = needle
       ? models.filter((entry) =>
-          [entry.id, entry.upstream_model, entry.upstream_display_name].some((value) =>
+          [entry.id, entry.upstream_model, entry.upstream_display_name ?? ''].some((value) =>
             value.toLowerCase().includes(needle),
           ),
         )
@@ -200,7 +200,7 @@ const ModelTable: React.FC<Props> = ({ models, loading, refreshing, error, hours
                       <div className="model-name">{entry.id}</div>
                       <div className="model-sub">
                         <code>{entry.upstream_model}</code>
-                        {entry.upstream_display_name !== entry.id && (
+                        {entry.upstream_display_name && entry.upstream_display_name !== entry.id && (
                           <span>上游名 {entry.upstream_display_name}</span>
                         )}
                       </div>
@@ -226,7 +226,9 @@ const ModelTable: React.FC<Props> = ({ models, loading, refreshing, error, hours
                     </td>
                     <td className="num mono">
                       {original !== null && original !== entry.pricing.factor && (
-                        <s className="price-was">{original}</s>
+                        <s className="price-was" title="促销前系数">
+                          {original}
+                        </s>
                       )}
                       {priceText(entry)}
                     </td>

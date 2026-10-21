@@ -161,6 +161,8 @@ describe('ModelResolver.list metadata', () => {
     const missing = (await resolver.list()).find((entry) => entry.upstream === 'qmodel_latest');
     expect(missing?.availability).toBe('config-only');
     expect(missing?.contextWindow).toBeNull();
+    // 上游没这个 key，名字就是未知，不能把 wire key 伪装成上游显示名
+    expect(missing?.upstreamDisplayName).toBeNull();
   });
 
   it('marks uncurated upstream models as upstream-only', async () => {
