@@ -4,11 +4,11 @@
 	@notEventStream not header Content-Type text/event-stream
 	encode @notEventStream zstd gzip
 
-	# Dashboard static files
-	root * /usr/share/caddy
-
-	# Serve dashboard at root
-	file_server
+	# Serve dashboard static files from backend container
+	@dashboard path /index.html /assets/*
+	handle @dashboard {
+		reverse_proxy host.docker.internal:3000 /usr/share/caddy{uri}
+	}
 
 	# This gateway only serves the routes below. Internet-wide scanners spend
 	# their day probing /.env, /.git/HEAD, /wp-login.php and friends; answering

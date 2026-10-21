@@ -31,9 +31,10 @@ services:
       - "443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./frontend/dist:/usr/share/caddy:ro
       - caddy-data:/data
       - caddy-config:/config
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
 volumes:
   qoder-cache:
