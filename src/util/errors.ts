@@ -22,6 +22,31 @@ export class BusyError extends HttpError {
 }
 
 /**
+ * Nothing is left to serve: the caller disconnected, or our own deadline fired
+ * while the request was still queued. 499 is the de-facto "client closed
+ * request" status; it must never be retried downstream.
+ */
+export class ClientGoneError extends HttpError {
+  constructor(message = 'Client closed request') {
+    super(499, message);
+    this.name = 'ClientGoneError';
+  }
+}
+
+/**
+ * The account has exhausted its credits. Surfaces as 429 like rate limiting, but
+ * it is *terminal*: no amount of back-off brings credits back, so the retry
+ * loop must let it through untouched (see DESIGN.md §7). Kept as a distinct type
+ * because status alone cannot tell the two apart.
+ */
+export class QuotaExhaustedError extends HttpError {
+  constructor(message: string, retryAfter?: number) {
+    super(429, message, retryAfter);
+    this.name = 'QuotaExhaustedError';
+  }
+}
+
+/**
  * Upstream explicitly rejected our PAT-derived job token (HTTP 401/403 or
  * business code 105). Distinct from a client-side bad API key: callers may
  * recover by force-refreshing the credential and retrying once.
@@ -114,7 +139,7 @@ export function mapUpstreamFailure({ status, body }: UpstreamFailure): HttpError
       );
     }
     if (QUOTA_ERROR_CODES.has(code)) {
-      return new HttpError(429, `Upstream quota exhausted (code ${code})`, retryAfter);
+      return new QuotaExhaustedError(`Upstream quota exhausted (code ${code})`, retryAfter);
     }
     if (BUSY_ERROR_CODES.has(code)) {
       return new HttpError(503, `Upstream is busy (code ${code})`, retryAfter ?? 30);

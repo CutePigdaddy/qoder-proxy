@@ -10,11 +10,14 @@ const EnvSchema = z.object({
   // Total wall clock per request. Large-context prompts (300k+ tokens) can spend
   // minutes in upstream prefill alone; keep this at or below the client's own budget.
   REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(600_000),
+  // Upper bound for a single retry back-off wait. Capped low on purpose: nothing
+  // is streamed during the wait, so a long one reads as a hang to the client.
+  RETRY_MAX_WAIT_MS: z.coerce.number().int().positive().default(30_000),
   BODY_LIMIT: z.coerce.number().int().positive().default(10 * 1024 * 1024),
   MODEL_FALLBACK: z.string().default('auto'),
   TOKEN_CACHE_PATH: z.string().default('.cache/tokens.json'),
   QODER_QUOTA_TTL_MS: z.coerce.number().int().min(0).default(60_000),
-  LOG_LEVEL: z.string().default('info'),
+  LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   MODELS_CONFIG_PATH: z.string().default('config/models.json'),
   // How to neutralise Claude Code's <total_tokens> markers, which otherwise
   // rewrite the system prompt tail every turn and void the prompt cache:
@@ -23,6 +26,10 @@ const EnvSchema = z.object({
   //   strip  - remove them entirely
   //   keep   - pass through unchanged (for A/B comparison only)
   TOKEN_MARKER_MODE: z.enum(['move', 'strip', 'keep']).default('move'),
+  // Emit per-request prompt-cache hash grids: re-serialises the whole
+  // conversation and runs ~144 SHA-256 passes per usage event. Forensics only,
+  // so it stays off unless someone is actively chasing a cache regression.
+  CACHE_DIAGNOSTICS: z.enum(['0', '1']).default('0'),
 });
 
 export interface ModelMapping {
@@ -50,12 +57,13 @@ export interface AppConfig {
   concurrency: number;
   queueLimit: number;
   requestTimeoutMs: number;
+  retryMaxWaitMs: number;
   bodyLimit: number;
-  modelFallback: string;
   tokenCachePath: string;
-  logLevel: string;
+  logLevel: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent';
   quotaTtlMs: number;
   tokenMarkerMode: 'move' | 'strip' | 'keep';
+  cacheDiagnostics: boolean;
   models: ModelsConfig;
 }
 
@@ -75,12 +83,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     concurrency: e.CONCURRENCY,
     queueLimit: e.QUEUE_LIMIT,
     requestTimeoutMs: e.REQUEST_TIMEOUT_MS,
+    retryMaxWaitMs: e.RETRY_MAX_WAIT_MS,
     bodyLimit: e.BODY_LIMIT,
-    modelFallback: e.MODEL_FALLBACK,
     tokenCachePath: e.TOKEN_CACHE_PATH,
     logLevel: e.LOG_LEVEL,
     quotaTtlMs: e.QODER_QUOTA_TTL_MS,
     tokenMarkerMode: e.TOKEN_MARKER_MODE,
+    cacheDiagnostics: e.CACHE_DIAGNOSTICS === '1',
     models: loadModelsConfig(e.MODELS_CONFIG_PATH, e.MODEL_FALLBACK),
   };
 }

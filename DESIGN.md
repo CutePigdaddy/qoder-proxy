@@ -216,6 +216,17 @@ qoder_proxy/
 | 答案开始后失败 | 流以 error 帧结束（不可再改状态码） |
 | 其他 | 502 |
 
+**重试边界**（客户端可观测的契约，改动需同步本文与 README）：
+
+| 场景 | 网关行为 |
+|---|---|
+| 429 限流 / 503 繁忙，且**尚未流出任何内容** | 内部退避重试最多 2 次：尊重 `retryAfterSeconds`，否则 2s/4s，单次上限 `RETRY_MAX_WAIT_MS`；等待期间客户端断开则立即放弃并释放并发槽 |
+| 429 **配额耗尽**（业务码 110, 112-119, 122） | **终态，不重试**，立即透传 |
+| 401 凭据被拒 | 强制刷新一次后重试；仍失败则透传 |
+| 已流出内容后失败 | 不重试，以流内 error 帧结束（状态码此时已无法更改） |
+
+同一个 429 承载「限流（瞬态）」与「配额（终态）」两种语义，所以「是否可重试」必须由错误类型 `QuotaExhaustedError` 判定，**不能只看 status**。
+
 **工具调用解析失败的处理**（先例 #132 的教训）：流中途截断或无法解析的 tool call，**绝不**当作正常文本答案转发给客户端 —— 应以错误结束该轮（502 或流的 error 帧且不带 finish reason），让上层 agent 重试。代码块或正文里的假标签必须保持为纯文本。
 
 ## 8. 配置
@@ -229,12 +240,15 @@ qoder_proxy/
 | `PORT` | 3000 | 监听端口 |
 | `CONCURRENCY` | 3 | 上游并发上限 |
 | `QUEUE_LIMIT` | 20 | 等待队列上限，满则 429 |
-| `REQUEST_TIMEOUT_MS` | 120000 | 单请求总超时 |
+| `REQUEST_TIMEOUT_MS` | 600000 | 单请求总超时，**从进入队列开始计时**（排队同样受限） |
+| `RETRY_MAX_WAIT_MS` | 30000 | 单次退避等待上限（限流/繁忙内部重试用） |
 | `BODY_LIMIT` | 10485760 | 请求体上限（10MB） |
-| `MODEL_FALLBACK` | auto | 未知模型名回退档位 |
+| `MODEL_FALLBACK` | auto | 未知模型名回退档位（`config/models.json` 未写 `fallback` 时生效） |
 | `TOKEN_CACHE_PATH` | `./.cache/tokens.json` | jt/jrt 缓存位置（可丢） |
+| `TOKEN_MARKER_MODE` | move | `<total_tokens>` 标记处理：move/strip/keep |
+| `CACHE_DIAGNOSTICS` | 0 | `1` 时输出缓存哈希网格（排查用，默认关） |
 | `DOMAIN` | 部署时填 | Caddyfile 签发证书用 |
-| `LOG_LEVEL` | info | pino 级别 |
+| `LOG_LEVEL` | info | pino 级别（写入 `.env` 亦生效） |
 
 ### 8.2 模型别名表（`config/models.json`）
 

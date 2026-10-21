@@ -1,5 +1,8 @@
 import pino from 'pino';
 
+// Bootstraps the logger at import time, which is earlier than `.env` is read, so
+// the level here is only a placeholder: `applyLogLevel` re-applies the validated
+// configuration once it exists (see src/index.ts).
 const level = process.env.LOG_LEVEL ?? 'info';
 
 export const logger = pino({
@@ -22,6 +25,11 @@ export const logger = pino({
     censor: '[redacted]',
   },
 });
+
+/** Apply the validated `LOG_LEVEL` after `.env` and config parsing have run. */
+export function applyLogLevel(level: string): void {
+  logger.level = level;
+}
 
 const SECRET_PATTERN = /\b(?:pt|jt|jrt)-[A-Za-z0-9._~+/=-]+/g;
 

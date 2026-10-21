@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { IREvent, IRRequest } from '../../src/ir/types.js';
+import type { IREvent, IRRequest, IRToolDef } from '../../src/ir/types.js';
 import { CompletionAccumulator } from '../../src/openai/nonStreamAdapter.js';
 import { toOpenAIUsage } from '../../src/openai/streamAdapter.js';
 import { decodeQoderBody } from '../../src/qoder/bodyCodec.js';
 import { QoderClient, type ResolvedModel } from '../../src/qoder/client.js';
 import type { CredentialStore, Credentials } from '../../src/qoder/credentialStore.js';
 import type { Endpoints } from '../../src/qoder/endpoints.js';
-import { CredentialRejectedError } from '../../src/util/errors.js';
+import { CredentialRejectedError, QuotaExhaustedError } from '../../src/util/errors.js';
 
 const endpoints: Endpoints = {
   gateway: 'https://gateway.example',
@@ -163,6 +163,43 @@ describe('QoderClient credential rejection recovery', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  it('never retries quota exhaustion, which also surfaces as 429', async () => {
+    const { spy, store } = fakeStore();
+    // Business code 110 is a spent credit pool: terminal, unlike rate limiting.
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async () => new Response(JSON.stringify({ code: 110 }), { status: 429 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new QoderClient({ endpoints, credentials: store });
+    const run = collect(client.chat(request, model, new AbortController().signal));
+
+    await expect(run).rejects.toBeInstanceOf(QuotaExhaustedError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(spy.forceRefresh).not.toHaveBeenCalled();
+  });
+
+  it('cuts a back-off short when the caller disconnects', async () => {
+    const { store } = fakeStore();
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(
+        async () => new Response(JSON.stringify({ retryAfterSeconds: 5 }), { status: 429 }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const controller = new AbortController();
+    const client = new QoderClient({ endpoints, credentials: store });
+    const started = Date.now();
+    const run = collect(client.chat(request, model, controller.signal));
+    setTimeout(() => controller.abort(), 30);
+
+    await expect(run).rejects.toMatchObject({ status: 429 });
+    // The 5s wait must not be served in full: the slot has to be freed at once.
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('never retries once content has reached the caller', async () => {
     const { spy, store } = fakeStore();
     const midStreamRejection = new Response(
@@ -214,6 +251,98 @@ describe('QoderClient request identity', () => {
     expect(bodies[0]!.request_id).not.toBe(bodies[1]!.request_id);
     // Within one request the record ids stay coherent.
     expect(bodies[0]!.request_set_id).toBe(bodies[0]!.chat_record_id);
+  });
+});
+
+describe('QoderClient upstream body shape', () => {
+  it('rejects truncated tool arguments instead of forwarding them as text', async () => {
+    const { store } = fakeStore();
+    const payload =
+      sseFrame(
+        JSON.stringify({
+          choices: [
+            {
+              delta: {
+                tool_calls: [{ index: 0, id: 'call_1', function: { name: 'get_weather', arguments: '{"city":' } }],
+              },
+            },
+          ],
+        }),
+      ) + 'data: [DONE]\n';
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(payload, { status: 200 })));
+
+    const client = new QoderClient({ endpoints, credentials: store });
+    const events: IREvent[] = [];
+    const run = (async () => {
+      for await (const event of client.chat(request, model, new AbortController().signal)) {
+        events.push(event);
+      }
+    })();
+
+    // Half a tool call must fail the turn: a silent text answer is worse than an
+    // error, because the agent would act on a garbled argument set.
+    await expect(run).rejects.toMatchObject({ status: 502 });
+    expect(events.some((event) => event.type === 'tool-call-end')).toBe(false);
+    expect(events.some((event) => event.type === 'text-delta')).toBe(false);
+  });
+
+  it('rejects a stream that carries usage but no content', async () => {
+    const { store } = fakeStore();
+    // The account is charged for the prompt either way, so a blank 200 would
+    // look like a successful answer that silently ate quota.
+    const payload =
+      sseFrame(
+        JSON.stringify({ choices: [], usage: { prompt_tokens: 10, completion_tokens: 0 } }),
+      ) + 'data: [DONE]\n';
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(payload, { status: 200 })));
+
+    const client = new QoderClient({ endpoints, credentials: store });
+    const run = collect(client.chat(request, model, new AbortController().signal));
+
+    await expect(run).rejects.toMatchObject({ status: 502, message: expect.stringContaining('without producing any content') });
+  });
+
+  it('serialises tool definitions byte-identically regardless of client order', async () => {
+    const { store } = fakeStore();
+    const fetchMock = vi.fn().mockImplementation(async () => okStream());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const tools: IRToolDef[] = [
+      {
+        name: 'zeta',
+        description: 'z',
+        parameters: { type: 'object', properties: { beta: { type: 'string' }, alpha: { type: 'number' } } },
+      },
+      { name: 'alpha', description: 'a', parameters: { type: 'object', properties: {} } },
+    ];
+    const reordered: IRToolDef[] = [
+      {
+        name: 'alpha',
+        description: 'a',
+        parameters: { properties: {}, type: 'object' },
+      },
+      {
+        name: 'zeta',
+        description: 'z',
+        parameters: { properties: { alpha: { type: 'number' }, beta: { type: 'string' } }, type: 'object' },
+      },
+    ];
+
+    const client = new QoderClient({ endpoints, credentials: store });
+    await collect(client.chat({ ...request, tools }, model, new AbortController().signal));
+    await collect(client.chat({ ...request, tools: reordered }, model, new AbortController().signal));
+
+    const bodies = fetchMock.mock.calls.map(
+      ([, init]) =>
+        JSON.parse(decodeQoderBody((init as RequestInit).body!.toString()).toString('utf8')) as {
+          tools: Array<{ function: { name: string } }>;
+        },
+    );
+
+    // Tools sit at the head of the upstream prompt: any jitter here voids the
+    // entire prompt cache, so the bytes — not just the meaning — must match.
+    expect(JSON.stringify(bodies[0]!.tools)).toBe(JSON.stringify(bodies[1]!.tools));
+    expect(bodies[0]!.tools.map((tool) => tool.function.name)).toEqual(['alpha', 'zeta']);
   });
 });
 

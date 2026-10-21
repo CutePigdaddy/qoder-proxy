@@ -199,7 +199,24 @@ describe('buildMessages totalTokensReminder markers', () => {
     expect(built.messages[1]).toEqual({ role: 'user', content: 'hi' });
   });
 
-  it('leaves marker-free prompts byte-identical in every mode', () => {
+  it('leaves unrelated whitespace in the system prompt alone', () => {
+    // Only the line the marker occupied may be touched: a proxy must not rewrite
+    // user content it was not asked to clean up.
+    const built = buildMessages(
+      {
+        model: 'auto',
+        system: 'first\n\n\n\nsecond\n\n<total_tokens>100 tokens left</total_tokens>',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: false,
+        includeUsage: false,
+      },
+      { tokenMarkerMode: 'move' },
+    );
+
+    expect((built.messages[0] as { content: string }).content).toBe('first\n\n\n\nsecond');
+  });
+
+  it('keeps marker-free prompts byte-identical in every mode', () => {
     for (const tokenMarkerMode of ['move', 'strip', 'keep'] as const) {
       const built = buildMessages(
         {

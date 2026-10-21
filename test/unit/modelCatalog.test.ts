@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
-import { parseCatalogPayload } from '../../src/qoder/modelCatalog.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { CredentialStore } from '../../src/qoder/credentialStore.js';
+import type { Endpoints } from '../../src/qoder/endpoints.js';
+import { ModelCatalog, parseCatalogPayload } from '../../src/qoder/modelCatalog.js';
 
 /** Trimmed copy of a real CN `model/list` response. */
 const liveShape = {
@@ -57,5 +59,61 @@ describe('parseCatalogPayload', () => {
     expect(parseCatalogPayload(null)).toEqual([]);
     expect(parseCatalogPayload({})).toEqual([]);
     expect(parseCatalogPayload({ chat: [{}] })).toEqual([]);
+  });
+});
+
+const endpoints: Endpoints = {
+  gateway: 'https://gateway.example',
+  openapi: 'https://openapi.example',
+  chat: 'https://gateway.example/api/chat',
+  modelList: 'https://gateway.example/api/models',
+  exchange: 'https://openapi.example/api/v1/jobToken/exchange',
+  refresh: 'https://openapi.example/api/v1/jobToken/refresh',
+  userInfo: 'https://openapi.example/api/v1/userinfo',
+  usage: 'https://openapi.example/api/v2/quota/usage',
+};
+
+const credentials = {
+  get: async () => ({
+    jobToken: 'job-token',
+    jobRefreshToken: 'job-refresh',
+    userID: 'user-1',
+    name: 'tester',
+    email: 'tester@example.com',
+    machineID: 'machine-1',
+    expiresAt: Date.now() + 3_600_000,
+  }),
+} as unknown as CredentialStore;
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe('ModelCatalog failure handling', () => {
+  it('falls back and stops retrying for the negative TTL window', async () => {
+    const fetchMock = vi.fn(async () => new Response('boom', { status: 500 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const catalog = new ModelCatalog({ endpoints, credentials });
+
+    const first = await catalog.list();
+    // Static table still carries real wire keys, so requests keep working.
+    expect(first.map((entry) => entry.key)).toContain('auto');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Chat requests resolve a model on the way in: the outage must not cost
+    // each of them a fresh timeout.
+    await catalog.list();
+    await catalog.list();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets an explicit refresh bypass the negative cache', async () => {
+    const fetchMock = vi.fn(async () => new Response('boom', { status: 500 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const catalog = new ModelCatalog({ endpoints, credentials });
+
+    await catalog.list();
+    await catalog.list(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

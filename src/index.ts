@@ -1,7 +1,7 @@
 import { loadConfig } from './config.js';
 import { loadEnvFile } from './env.js';
 import { AdmissionGate } from './concurrency/admission.js';
-import { logger } from './obs/logger.js';
+import { applyLogLevel, logger } from './obs/logger.js';
 import { metrics } from './obs/metrics.js';
 import { ModelResolver } from './openai/modelResolver.js';
 import { QoderClient } from './qoder/client.js';
@@ -38,6 +38,9 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // `.env` is only readable now, so the boot-time log level was a placeholder.
+  applyLogLevel(config.logLevel);
+
   if (!config.authEnabled) {
     logger.error('PROXY_API_KEY is empty: every /v1 request will be refused (fail-closed)');
   }
@@ -53,6 +56,8 @@ async function main(): Promise<void> {
     endpoints,
     credentials,
     tokenMarkerMode: config.tokenMarkerMode,
+    retryMaxWaitMs: config.retryMaxWaitMs,
+    cacheDiagnostics: config.cacheDiagnostics,
   });
   const quota = new QuotaService({ endpoints, credentials, ttlMs: config.quotaTtlMs });
   const gate = new AdmissionGate(config.concurrency, config.queueLimit);

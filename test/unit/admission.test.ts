@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AdmissionGate } from '../../src/concurrency/admission.js';
-import { BusyError } from '../../src/util/errors.js';
+import { BusyError, ClientGoneError } from '../../src/util/errors.js';
 
 describe('AdmissionGate', () => {
   it('admits up to the concurrency limit without queueing', async () => {
@@ -42,5 +42,32 @@ describe('AdmissionGate', () => {
     release();
     release();
     expect(gate.inFlight).toBe(0);
+  });
+
+  it('drops a queued request when its caller disconnects', async () => {
+    const gate = new AdmissionGate(1, 2);
+    const held = await gate.enter();
+    const controller = new AbortController();
+    const queued = gate.enter(controller.signal);
+    expect(gate.depth).toBe(1);
+
+    controller.abort();
+    await expect(queued).rejects.toBeInstanceOf(ClientGoneError);
+    // The abandoned waiter must leave the queue, not sit at its head forever.
+    expect(gate.depth).toBe(0);
+
+    held();
+    expect(gate.inFlight).toBe(0);
+  });
+
+  it('refuses to queue a request that already aborted', async () => {
+    const gate = new AdmissionGate(1, 1);
+    const held = await gate.enter();
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(gate.enter(controller.signal)).rejects.toBeInstanceOf(ClientGoneError);
+    expect(gate.depth).toBe(0);
+    held();
   });
 });

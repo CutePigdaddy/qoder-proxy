@@ -243,7 +243,8 @@ curl -s https://$DOMAIN/v1/quota -H "Authorization: Bearer $PROXY_API_KEY" | jq
 | `PORT`               | `3000`               | 监听端口                                    |
 | `CONCURRENCY`        | `3`                  | 同时进上游的请求上限                              |
 | `QUEUE_LIMIT`        | `20`                 | 等待队列上限，占满即 429 + `Retry-After`          |
-| `REQUEST_TIMEOUT_MS` | `600000`             | 单请求总超时（巨型上下文 prefill 可超 2 分钟，勿设太小）                    |
+| `REQUEST_TIMEOUT_MS` | `600000`             | 单请求总超时（巨型上下文 prefill 可超 2 分钟，勿设太小）；从进入队列开始计时                    |
+| `RETRY_MAX_WAIT_MS`  | `30000`              | 单次退避等待上限（限流/繁忙内部重试用）                    |
 | `BODY_LIMIT`         | `10485760`           | 请求体上限（10 MB）                            |
 | `MODEL_FALLBACK`     | `auto`               | 未知名模型的回退档位                              |
 | `MODELS_CONFIG_PATH` | `config/models.json` | 模型映射表（显示名 → wire key）+ 别名表           |
@@ -251,6 +252,7 @@ curl -s https://$DOMAIN/v1/quota -H "Authorization: Bearer $PROXY_API_KEY" | jq
 | `QODER_QUOTA_TTL_MS` | `60000`              | `/v1/quota` 缓存时长，`0` 表示每次都回源            |
 | `LOG_LEVEL`          | `info`               | pino 级别                                 |
 | `TOKEN_MARKER_MODE`  | `move`               | Claude Code `<total_tokens>` 标记处理：`move` 从 system 剥离并把最新一条挪到本轮末条 user/tool 消息（缓存稳定+模型可见预算）；`strip` 直接删除；`keep` 原样透传（仅用于对照实验） |
+| `CACHE_DIAGNOSTICS`  | `0`                  | `1` 时每个请求额外输出缓存哈希网格（debug 级，含 144 次 SHA-256，仅供排查缓存回归） |
 | `DOMAIN`             | —                    | 仅 Caddyfile 使用                          |
 
 上游主机可用 `QODER_CN_BASE_URL` / `QODER_CN_OPENAPI_URL` 覆盖（企业 VPC 或测试环境）。
@@ -272,16 +274,31 @@ curl https://$DOMAIN/health
 
 - **并发是硬约束**：单账号共享同一配额与同一条 token 链。`CONCURRENCY` 默认 3 是保守值，调高前先压测。
 - **背压存在**：队列满返回 429，客户端应尊重 `Retry-After`。
-- **客户端断开即 abort 上游**，不会为已离开的请求继续消耗额度。
+- **上游限流在网关内部消化**：429/503 在尚未流出任何内容时最多退避重试 2 次（尊重上游 `retryAfterSeconds`，单次上限 `RETRY_MAX_WAIT_MS`）；**配额耗尽虽然同样是 429，但属终态，不重试**，直接透传。
+- **客户端断开即 abort 上游**，不会为已离开的请求继续消耗额度；排队中被取消的请求会立刻离队，不占槽。
 - **日志不含正文与凭据**：每请求一行元数据（模型、耗时、状态、并发）。错误消息会先做 token 形态脱敏。
 - **配额**：`qoder_quota_remaining` 指标已预留，但未做告警开关（按设计约定），需要时在 Prometheus 侧接规则。
 
 ## 测试
 
 ```bash
-npm test          # 48 个单测：签名、编码、SSE 解包、并发、错误映射、模型解析、适配层
+npm test          # 154 个用例 / 18 个文件，约 6 秒
 npm run typecheck
 ```
+
+分四层，越往下越接近真实使用：
+
+| 层 | 位置 | 覆盖什么 |
+| --- | --- | --- |
+| 单元 | `test/unit/` | 签名、WAF 编码、SSE 解包（含 UTF-8 跨块、超长帧、无尾换行）、错误映射、重试边界、模型解析、目录缓存、凭据单飞 |
+| 协议契约 | `test/integration/openai-contract.test.ts` | 客户端真正消费的形状：`chat.completion` / `.chunk`、`finish_reason`、usage 帧位置、`[DONE]`、错误信封 |
+| 工具往返 | `test/integration/tool-round-trip.test.ts` | 参数分片拼装、并行工具调用、下一轮回传、坏 JSON 不当文本转发、tools 序列化字节稳定（缓存） |
+| 故障与并发 | `test/integration/upstream-faults.test.ts`、`backpressure.test.ts`、`routes.test.ts` | 客户端断开/请求超时/上游空流、并发上限、队列满 429、排队取消、`BODY_LIMIT` 413、`/health` `/models` `/quota` `/metrics` |
+
+跑测试时的两个约定：
+
+- 集成测试用 `test/helpers/gateway.ts` 组装 `Deps`，只替换上游 client，中间件/SSE 编码/准入闸门都跑真的。
+- 测试配置固定 `pool: 'threads'`：默认 `forks` 池在本机会偶发 SSR 缓存写入失败并**静默少跑整个文件**，串行或 `threads` 才可靠。
 
 签名与编码这类"最容易写错、最难调试"的逻辑用**确定性单测**锁住，不需要真实调用、不烧额度。真实的端到端验证留给 `npm run probe`（手动执行）。
 

@@ -7,10 +7,10 @@ import { metrics } from '../../obs/metrics.js';
 import { CompletionAccumulator } from '../../openai/nonStreamAdapter.js';
 import { parseChatRequest } from '../../openai/requestAdapter.js';
 import { OpenAIStreamEncoder, toOpenAIUsage, type OpenAIUsage } from '../../openai/streamAdapter.js';
-import { HttpError } from '../../util/errors.js';
+import { ClientGoneError, HttpError } from '../../util/errors.js';
 import type { Deps } from '../deps.js';
 
-function errorResponse(c: Context, status: number, message: string): Response {
+function errorResponse(c: Context, status: number, message: string, retryAfter?: number): Response {
   const type =
     status === 401
       ? 'authentication_error'
@@ -19,6 +19,11 @@ function errorResponse(c: Context, status: number, message: string): Response {
         : status >= 500
           ? 'upstream_error'
           : 'invalid_request_error';
+  // Only meaningful on the two statuses clients back off on, and only when the
+  // upstream actually supplied a hint.
+  if (retryAfter !== undefined && (status === 429 || status === 503)) {
+    c.header('Retry-After', String(retryAfter));
+  }
   return c.json({ error: { message, type } }, status as ContentfulStatusCode);
 }
 
@@ -51,18 +56,13 @@ export function registerChat(app: Hono, deps: Deps): void {
       modelKey = model.id;
       deps.logger.debug({ model: model.id, upstream: model.key, matched: model.matched }, 'model resolved');
 
-      try {
-        release = await deps.gate.enter();
-      } catch (error) {
-        const retryAfter = error instanceof HttpError && error.retryAfter ? error.retryAfter : 5;
-        c.header('Retry-After', String(retryAfter));
-        record('429');
-        return errorResponse(c, 429, 'Gateway is at capacity, retry shortly');
-      }
-      deps.updateGauges();
-
+      // Arm the deadline before queueing: a request that never gets a slot must
+      // not be immortal. The same controller then covers the upstream call.
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(new Error('request timeout')), deps.config.requestTimeoutMs);
+      const timer = setTimeout(
+        () => controller.abort(new Error('request timeout')),
+        deps.config.requestTimeoutMs,
+      );
 
       const clientSignal = c.req.raw.signal;
       if (clientSignal.aborted) controller.abort();
@@ -74,6 +74,27 @@ export function registerChat(app: Hono, deps: Deps): void {
         release = null;
         deps.updateGauges();
       };
+
+      try {
+        release = await deps.gate.enter(controller.signal);
+      } catch (error) {
+        cleanup();
+        if (error instanceof ClientGoneError) {
+          // Distinguish "caller hung up" from "our own deadline expired".
+          const gone = clientSignal.aborted;
+          const status = gone ? 499 : 504;
+          record(String(status));
+          return errorResponse(
+            c,
+            status,
+            gone ? 'Client closed the connection while queued' : 'Request timed out while queued',
+          );
+        }
+        const retryAfter = error instanceof HttpError && error.retryAfter ? error.retryAfter : 5;
+        record('429');
+        return errorResponse(c, 429, 'Gateway is at capacity, retry shortly', retryAfter);
+      }
+      deps.updateGauges();
 
       if (req.stream) {
         return streamSSE(c, async (stream) => {
@@ -156,7 +177,12 @@ export function registerChat(app: Hono, deps: Deps): void {
       metrics.upstreamErrors.inc({ status: String(status) });
       record(String(status));
       deps.logger.warn({ err: message, model: modelKey, status }, 'request failed');
-      return errorResponse(c, status, message);
+      return errorResponse(
+        c,
+        status,
+        message,
+        error instanceof HttpError ? error.retryAfter : undefined,
+      );
     }
   });
 }

@@ -10,8 +10,13 @@ export type TokenMarkerMode = 'move' | 'strip' | 'keep';
  * neutralise it here: strip the markers from the system prompt and (in the
  * default `move` mode) re-attach the latest one to the tail of the current
  * turn so the model still sees the budget.
+ *
+ * The line-shaped variant exists so stripping removes the line the marker
+ * occupied instead of collapsing every blank run in the prompt: the rest of the
+ * system prompt must come out byte-identical, not merely equivalent.
  */
 const TOKEN_MARKER_RE = /<total_tokens>[\s\S]*?<\/total_tokens>/g;
+const TOKEN_MARKER_LINE_RE = /(?:\r?\n[ \t]*)?<total_tokens>[\s\S]*?<\/total_tokens>[ \t]*(?:\r?\n)?/g;
 
 export interface BuiltMessages {
   /** Wire payload: a leading system message (if any) followed by the conversation. */
@@ -87,7 +92,7 @@ export function buildMessages(
   // byte-stable across turns and the whole history remains cacheable.
   const markers = mode === 'keep' ? [] : (system.match(TOKEN_MARKER_RE) ?? []);
   if (markers.length > 0) {
-    system = system.replace(TOKEN_MARKER_RE, '').replace(/\n{3,}/g, '\n\n').trimEnd();
+    system = system.replace(TOKEN_MARKER_LINE_RE, '').trimEnd();
     if (mode === 'move') {
       const latest = markers[markers.length - 1];
       for (let i = messages.length - 1; i >= 0; i -= 1) {

@@ -1,4 +1,6 @@
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
+import { redactSecrets } from '../obs/logger.js';
 import { authMiddleware } from './middleware/auth.js';
 import { requestLogger } from './middleware/logging.js';
 import { registerChat } from './routes/chat.js';
@@ -20,7 +22,27 @@ export function createApp(deps: Deps): Hono {
   registerMetrics(app, deps);
   registerRoot(app);
 
+  // Auth runs first: an unauthenticated caller should not get us to buffer a
+  // body on its behalf. `BODY_LIMIT` is enforced above the route because the
+  // whole conversation is buffered and re-sent upstream — without a cap, one
+  // oversized paste is enough to hurt the process.
   app.use('/v1/*', authMiddleware(deps.config));
+  app.use(
+    '/v1/*',
+    bodyLimit({
+      maxSize: deps.config.bodyLimit,
+      onError: (c) =>
+        c.json(
+          {
+            error: {
+              message: `Request body exceeds the configured ${deps.config.bodyLimit} bytes`,
+              type: 'invalid_request_error',
+            },
+          },
+          413,
+        ),
+    }),
+  );
   registerChat(app, deps);
   registerModels(app, deps);
   registerQuota(app, deps);
@@ -38,7 +60,9 @@ export function createApp(deps: Deps): Hono {
   );
 
   app.onError((error, c) => {
-    deps.logger.error({ err: error.message }, 'unhandled gateway error');
+    // The last-resort handler is exactly where an upstream URL or body full of
+    // credential material is most likely to surface, so redact like the routes do.
+    deps.logger.error({ err: redactSecrets(error.message) }, 'unhandled gateway error');
     return c.json({ error: { message: 'Internal gateway error', type: 'server_error' } }, 500);
   });
 

@@ -1,4 +1,5 @@
 import { SingleFlight } from '../concurrency/singleFlight.js';
+import { logger } from '../obs/logger.js';
 import { buildCosyHeadersFor } from './cosySigner.js';
 import type { CredentialStore } from './credentialStore.js';
 import type { Endpoints } from './endpoints.js';
@@ -16,6 +17,12 @@ export interface CatalogEntry {
 const CACHE_TTL_MS = 10 * 60_000;
 /** Hard ceiling on discovery latency; /v1/models must never hang on auth. */
 const REMOTE_TIMEOUT_MS = 8_000;
+/**
+ * How long a failed fetch suppresses retries. Without it, every chat request
+ * during a catalog outage pays the full timeout before falling back — the model
+ * directory is resolved on the way to every completion.
+ */
+const FAILURE_TTL_MS = 30_000;
 const DEFAULT_MAX_OUTPUT = 32_768;
 
 /**
@@ -92,6 +99,7 @@ export function parseCatalogPayload(json: unknown): CatalogEntry[] {
 export class ModelCatalog {
   private entries: CatalogEntry[] | null = null;
   private fetchedAt = 0;
+  private failedAt = 0;
   private readonly flight = new SingleFlight<CatalogEntry[]>();
 
   constructor(
@@ -102,31 +110,27 @@ export class ModelCatalog {
   ) {}
 
   async list(force = false): Promise<CatalogEntry[]> {
-    if (!force && this.entries && Date.now() - this.fetchedAt < CACHE_TTL_MS) {
-      return this.entries;
+    if (!force) {
+      const now = Date.now();
+      if (this.entries && now - this.fetchedAt < CACHE_TTL_MS) return this.entries;
+      // Back off after a failure instead of paying the timeout on every request.
+      if (this.failedAt !== 0 && now - this.failedAt < FAILURE_TTL_MS) return this.fallback();
     }
     try {
-      return await this.withTimeout(this.flight.run(() => this.fetchRemote()));
-    } catch {
-      return this.entries ?? FALLBACK_ENTRIES;
+      return await this.flight.run(() => this.fetchRemote());
+    } catch (error) {
+      this.failedAt = Date.now();
+      logger.warn(
+        { err: error instanceof Error ? error.message : String(error) },
+        'model catalog unavailable; falling back to the static table',
+      );
+      return this.fallback();
     }
   }
 
-  private withTimeout(promise: Promise<CatalogEntry[]>): Promise<CatalogEntry[]> {
-    return new Promise<CatalogEntry[]>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('model catalog timed out')), REMOTE_TIMEOUT_MS);
-      timer.unref?.();
-      promise.then(
-        (value) => {
-          clearTimeout(timer);
-          resolve(value);
-        },
-        (error: unknown) => {
-          clearTimeout(timer);
-          reject(error instanceof Error ? error : new Error(String(error)));
-        },
-      );
-    });
+  /** Last good catalog, or the conservative built-in table. */
+  private fallback(): CatalogEntry[] {
+    return this.entries ?? FALLBACK_ENTRIES;
   }
 
   async find(key: string): Promise<CatalogEntry | undefined> {
@@ -142,9 +146,11 @@ export class ModelCatalog {
     const creds = await this.opts.credentials.get();
     const headers = buildCosyHeadersFor(null, this.opts.endpoints.modelList, creds);
 
+    // Single timeout source of truth: the previous split (8s outer race over a
+    // 15s fetch) left the request running for 7s after we had already given up.
     const response = await fetch(this.opts.endpoints.modelList, {
       headers: { ...headers, Accept: 'application/json', 'Accept-Encoding': 'identity' },
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(REMOTE_TIMEOUT_MS),
     });
     if (!response.ok) throw new Error(`model catalog returned ${response.status}`);
 
@@ -154,6 +160,7 @@ export class ModelCatalog {
 
     this.entries = entries;
     this.fetchedAt = Date.now();
+    this.failedAt = 0;
     return entries;
   }
 }

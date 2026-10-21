@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import type { IREvent, IRRequest } from '../ir/types.js';
 import { logger, redactSecrets } from '../obs/logger.js';
-import { CredentialRejectedError, HttpError, mapUpstreamFailure } from '../util/errors.js';
+import { CredentialRejectedError, HttpError, QuotaExhaustedError, mapUpstreamFailure } from '../util/errors.js';
 import { encodeQoderBody } from './bodyCodec.js';
 import { buildCosyHeadersFor } from './cosySigner.js';
 import type { CredentialStore } from './credentialStore.js';
@@ -73,6 +73,42 @@ function stableId(prefix: string, ...parts: string[]): string {
   return hash.digest('hex').slice(0, 32);
 }
 
+/** Back-off attempts for transient upstream refusal (429 rate limit / 503 busy). */
+const MAX_BUSY_RETRIES = 2;
+const DEFAULT_RETRY_MAX_WAIT_MS = 30_000;
+
+/**
+ * Transient upstream refusal: worth another attempt. 429 also carries the
+ * terminal quota signal, which must pass straight through — retrying it only
+ * delays an error the caller needs to see (`DESIGN.md` §7).
+ */
+function isTransientBusy(error: unknown): error is HttpError {
+  return (
+    error instanceof HttpError &&
+    !(error instanceof QuotaExhaustedError) &&
+    (error.status === 429 || error.status === 503)
+  );
+}
+
+/**
+ * Wait `ms`, or stop as soon as the caller disconnects. Returns false when the
+ * wait was cut short — the caller is gone, so there is nothing left to retry.
+ */
+function waitForRetry(ms: number, signal: AbortSignal): Promise<boolean> {
+  if (signal.aborted) return Promise.resolve(false);
+  return new Promise<boolean>((resolve) => {
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      resolve(false);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve(true);
+    }, ms);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 function parseToolArguments(raw: string, identity: string): Record<string, unknown> {
   if (!raw.trim()) return {};
   let parsed: unknown;
@@ -88,27 +124,86 @@ function parseToolArguments(raw: string, identity: string): Record<string, unkno
 }
 
 /**
+ * Hash grids over the wire conversation, for one-off prompt-cache forensics
+ * (`CACHE_DIAGNOSTICS=1`). The first mismatching segment between two calls is
+ * what voids the whole prefix match, so a dense grid localises the culprit.
+ *
+ * Off by default: it re-serialises the entire conversation and runs ~144 SHA-256
+ * passes per usage event, which is real work on a multi-megabyte prompt. It must
+ * also never log raw prompt text — grids over a stable prefix are enough.
+ */
+function cacheDiagnostics(
+  messages: unknown[],
+  tools: Array<{ function: { name: string } }>,
+  prompt: number,
+  completion: number,
+  details: { cached_tokens?: number; cacheable_tokens?: number } | undefined,
+): Record<string, unknown> {
+  const wire = JSON.stringify(messages);
+  const hash = (text: string): string => crypto.createHash('sha256').update(text).digest('hex').slice(0, 6);
+  const seg = (start: number, len: number): string => hash(wire.slice(start, start + len));
+  const grid: string[] = [];
+  for (let i = 0; i < 64; i += 1) grid.push(seg(i * 1024, 1024)); // dense 0-64 KiB
+  const far: string[] = [];
+  for (let i = 0; i < 40; i += 1) far.push(seg(65_536 + i * 32_768, 32_768)); // coarse tail
+  const toolsJson = JSON.stringify(tools);
+  const tgrid: string[] = [];
+  for (let i = 0; i < 8; i += 1) tgrid.push(hash(toolsJson.slice(i * 256, i * 256 + 256)));
+  const mgrid: string[] = []; // fine grid over the 128-192 KiB band
+  for (let i = 0; i < 32; i += 1) mgrid.push(seg(131_072 + i * 2048, 2048));
+
+  return {
+    promptTokens: prompt,
+    completionTokens: completion,
+    cachedTokens: details?.cached_tokens ?? 0,
+    cacheableTokens: details?.cacheable_tokens ?? 0,
+    msgCount: messages.length,
+    promptChars: wire.length,
+    toolsN: tools.length,
+    toolsNameHash: hash(tools.map((tool) => tool.function.name).join(',')),
+    toolsFullHash: hash(toolsJson),
+    grid: grid.join(','),
+    far: far.join(','),
+    tgrid: tgrid.join(','),
+    mgrid: mgrid.join(','),
+  };
+}
+
+/**
  * Upstream client for the Qoder CN chat gateway.
  *
  * The whole wire contract lives here: body shape, WAF encoding, COSY signing,
  * double-layer SSE unwrapping, and translation into neutral IR events.
  */
 export class QoderClient {
+  private readonly retryMaxWaitMs: number;
+
   constructor(
     private readonly opts: {
       endpoints: Endpoints;
       credentials: CredentialStore;
       tokenMarkerMode?: TokenMarkerMode;
+      /** Upper bound for a single back-off wait, in milliseconds. */
+      retryMaxWaitMs?: number;
+      /** Emit the prompt-cache hash grids on the usage event (`CACHE_DIAGNOSTICS=1`). */
+      cacheDiagnostics?: boolean;
     },
-  ) {}
+  ) {
+    this.retryMaxWaitMs = opts.retryMaxWaitMs ?? DEFAULT_RETRY_MAX_WAIT_MS;
+  }
 
   /**
    * Stream one chat completion. Before anything has been streamed to the
    * caller, absorb transient upstream refusals internally instead of surfacing
    * them: credential rejections trigger one forced refresh, rate limiting and
    * queue pressure (429/503) are retried after a short back-off (up to twice,
-   * capped at 30s per wait). Clients that retry on 429 in a tight loop would
-   * otherwise hammer a rate-limited upstream into permanent rejection.
+   * capped at `retryMaxWaitMs` per wait). Clients that retry on 429 in a tight
+   * loop would otherwise hammer a rate-limited upstream into permanent
+   * rejection.
+   *
+   * Quota exhaustion also arrives as 429 but is terminal, so it is never
+   * retried; and the back-off wait aborts with the caller, so a disconnected
+   * client never keeps a concurrency slot pinned for the full wait.
    */
   async *chat(req: IRRequest, model: ResolvedModel, signal: AbortSignal): AsyncGenerator<IREvent> {
     let credentialRetries = 0;
@@ -137,18 +232,15 @@ export class QoderClient {
           continue;
         }
 
-        if (
-          error instanceof HttpError &&
-          (error.status === 429 || error.status === 503) &&
-          busyRetries < 2
-        ) {
+        if (isTransientBusy(error) && busyRetries < MAX_BUSY_RETRIES) {
           busyRetries += 1;
-          const waitMs = Math.min((error.retryAfter ?? busyRetries * 2) * 1000, 30_000);
+          const waitMs = Math.min((error.retryAfter ?? busyRetries * 2) * 1000, this.retryMaxWaitMs);
           logger.warn(
             { model: model.key, status: error.status, waitMs, busyRetries },
             'upstream rate limited or busy before streaming; backing off and retrying',
           );
-          await new Promise((resolve) => setTimeout(resolve, waitMs));
+          // A caller that walked away must not keep the slot for the whole wait.
+          if (!(await waitForRetry(waitMs, signal))) throw error;
           continue;
         }
 
@@ -300,24 +392,6 @@ export class QoderClient {
         const prompt = inner.usage.prompt_tokens ?? inner.usage.input_tokens ?? 0;
         const completion = inner.usage.completion_tokens ?? inner.usage.output_tokens ?? 0;
         const details = inner.usage.prompt_tokens_details;
-        // Cache diagnostics: a dense hash grid over the first 8 KiB of the wire
-        // conversation localises where consecutive calls diverge — the first
-        // mismatching segment kills the entire prefix match. `peek` shows the
-        // suspect zone right after the known-stable head window.
-        const wire = JSON.stringify(messages);
-        const hash = (text: string): string => crypto.createHash('sha256').update(text).digest('hex').slice(0, 6);
-        const seg = (start: number, len: number): string => hash(wire.slice(start, start + len));
-        const grid: string[] = [];
-        for (let i = 0; i < 64; i += 1) grid.push(seg(i * 1024, 1024)); // dense 0-64 KiB
-        const far: string[] = [];
-        for (let i = 0; i < 40; i += 1) far.push(seg(65536 + i * 32768, 32768)); // coarse tail
-        const toolsJson = JSON.stringify(tools);
-        const tgrid: string[] = [];
-        for (let i = 0; i < 8; i += 1) tgrid.push(hash(toolsJson.slice(i * 256, i * 256 + 256)));
-        // Fine grid over the 128-192 KiB band where consecutive loop requests
-        // first diverge; raw peeks reveal the volatile field itself.
-        const mgrid: string[] = [];
-        for (let i = 0; i < 32; i += 1) mgrid.push(seg(131072 + i * 2048, 2048));
         logger.info(
           {
             model: model.id,
@@ -326,21 +400,13 @@ export class QoderClient {
             cachedTokens: details?.cached_tokens ?? 0,
             cacheableTokens: details?.cacheable_tokens ?? 0,
             msgCount: messages.length,
-            promptChars: wire.length,
             toolsN: tools.length,
-            toolsNameHash: hash(tools.map((tool) => tool.function.name).join(',')),
-            toolsFullHash: hash(toolsJson),
-            grid: grid.join(','),
-            far: far.join(','),
-            tgrid: tgrid.join(','),
-            mgrid: mgrid.join(','),
-            peek: redactSecrets(wire.slice(420, 540)),
-            peekMid: [130500, 133000, 138000]
-              .map((pos) => redactSecrets(wire.slice(pos, pos + 220)))
-              .join(' ||| '),
           },
           'usage',
         );
+        if (this.opts.cacheDiagnostics) {
+          logger.debug(cacheDiagnostics(messages, tools, prompt, completion, details), 'usage-cache');
+        }
         yield {
           type: 'usage',
           promptTokens: prompt,
