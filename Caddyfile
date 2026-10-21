@@ -4,6 +4,10 @@
 	@notEventStream not header Content-Type text/event-stream
 	encode @notEventStream zstd gzip
 
+	# Dashboard static files
+	root * /frontend/dist
+	file_server
+
 	# This gateway only serves the routes below. Internet-wide scanners spend
 	# their day probing /.env, /.git/HEAD, /wp-login.php and friends; answering
 	# them here keeps them out of the app and out of its logs. Add new routes
