@@ -5,7 +5,9 @@
 	encode @notEventStream zstd gzip
 
 	# Dashboard static files
-	root * /frontend/dist
+	root * /usr/share/caddy
+
+	# Serve dashboard at root
 	file_server
 
 	# This gateway only serves the routes below. Internet-wide scanners spend
