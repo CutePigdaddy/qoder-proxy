@@ -566,6 +566,49 @@ button {
   font-weight: 600;
 }
 
+/* 失败请求：0 token 的行需要一个解释，否则看起来像数据缺失 */
+.fail-dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--poor);
+  vertical-align: middle;
+}
+
+/* ---------- 空状态 ---------- */
+.empty {
+  padding: 44px 32px;
+  max-width: 620px;
+}
+
+.empty h2 {
+  font-size: 15px;
+  margin-bottom: 10px;
+}
+
+.empty p {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--text-2);
+  line-height: 1.7;
+}
+
+.empty .empty-hint {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.empty code {
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #eef0f4;
+  color: #344054;
+}
+
 /* ---------- 首屏 Key 输入 ---------- */
 .gate {
   min-height: 100vh;

@@ -132,7 +132,20 @@ function App() {
         </div>
       )}
 
-      {data ? (
+      {data && data.summary.totalRequests === 0 ? (
+        <main className="stack">
+          <section className="panel empty">
+            <h2>这个时间范围内还没有流量</h2>
+            <p>
+              仪表盘只统计真实经过网关的请求。发一次 <code>/v1/chat/completions</code>{' '}
+              调用后刷新，这里会出现真实的新增输入、输出与缓存命中。
+            </p>
+            <p className="empty-hint">
+              如果刚部署完，历史记录保存在容器的 <code>.cache/usage.jsonl</code>，重启不会丢。
+            </p>
+          </section>
+        </main>
+      ) : data ? (
         <main className="stack">
           <KeyMetrics data={data} />
           <TokenTrendChart tokens={data.timeSeries.tokens} requests={data.timeSeries.requests} />

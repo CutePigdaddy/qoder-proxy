@@ -4,6 +4,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Release } from '../../concurrency/admission.js';
 import { redactSecrets } from '../../obs/logger.js';
 import { metrics } from '../../obs/metrics.js';
+import { inferApplication } from '../../obs/usageStore.js';
 import { CompletionAccumulator } from '../../openai/nonStreamAdapter.js';
 import { parseChatRequest } from '../../openai/requestAdapter.js';
 import { OpenAIStreamEncoder, toOpenAIUsage, type OpenAIUsage } from '../../openai/streamAdapter.js';
@@ -33,10 +34,28 @@ export function registerChat(app: Hono, deps: Deps): void {
     let release: Release | null = null;
     let cleanup: (() => void) | null = null;
     let modelKey = 'unknown';
+    /** Last usage frame seen for this request; null when the upstream never sent one. */
+    let tokens: { prompt: number; completion: number; cached: number } | null = null;
 
     const record = (status: string): void => {
       metrics.requests.inc({ model: modelKey, status });
-      metrics.duration.observe((Date.now() - started) / 1000);
+      const durationMs = Date.now() - started;
+      metrics.duration.observe(durationMs / 1000);
+      // One row per request for the dashboard. Cached tokens come from the
+      // upstream usage frame, so "新增输入" is prompt minus cache hits.
+      const prompt = tokens?.prompt ?? 0;
+      const cached = tokens?.cached ?? 0;
+      deps.usage.record({
+        ts: Date.now(),
+        model: modelKey,
+        application: inferApplication(c.req.header('user-agent')),
+        provider: 'Qoder CN',
+        inputTokens: Math.max(0, prompt - cached),
+        cachedTokens: cached,
+        outputTokens: tokens?.completion ?? 0,
+        durationMs,
+        status: Number(status) || 0,
+      });
     };
 
     try {
@@ -126,6 +145,11 @@ export function registerChat(app: Hono, deps: Deps): void {
                   break;
                 case 'usage':
                   pendingUsage = toOpenAIUsage(event);
+                  tokens = {
+                    prompt: event.promptTokens,
+                    completion: event.completionTokens,
+                    cached: event.cachedTokens ?? 0,
+                  };
                   break;
                 case 'done':
                   await stream.writeSSE({ data: JSON.stringify(encoder.finish(event.finishReason)) });
@@ -164,6 +188,13 @@ export function registerChat(app: Hono, deps: Deps): void {
       const accumulator = new CompletionAccumulator();
       for await (const event of deps.client.chat(req, model, controller.signal)) {
         if (event.type === 'error') throw new HttpError(event.status ?? 502, event.message);
+        if (event.type === 'usage') {
+          tokens = {
+            prompt: event.promptTokens,
+            completion: event.completionTokens,
+            cached: event.cachedTokens ?? 0,
+          };
+        }
         accumulator.apply(event);
       }
 

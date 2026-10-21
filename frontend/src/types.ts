@@ -7,6 +7,7 @@ export interface UsageRow {
   inputTokens: number;
   outputTokens: number;
   cacheHitTokens: number;
+  status: number;
 }
 
 export interface TimeSeriesPoint {

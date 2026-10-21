@@ -3,6 +3,7 @@ import { loadEnvFile } from './env.js';
 import { AdmissionGate } from './concurrency/admission.js';
 import { applyLogLevel, logger } from './obs/logger.js';
 import { metrics } from './obs/metrics.js';
+import { UsageStore } from './obs/usageStore.js';
 import { ModelResolver } from './openai/modelResolver.js';
 import { QoderClient } from './qoder/client.js';
 import { CredentialStore } from './qoder/credentialStore.js';
@@ -61,6 +62,10 @@ async function main(): Promise<void> {
   });
   const quota = new QuotaService({ endpoints, credentials, ttlMs: config.quotaTtlMs });
   const gate = new AdmissionGate(config.concurrency, config.queueLimit);
+  // Load the on-disk history before serving so the dashboard is not empty for
+  // the first 30 seconds after a restart.
+  const usage = new UsageStore({ path: config.usageLogPath, logger });
+  await usage.load();
   const resolver = new ModelResolver({
     catalog,
     models: config.models.models,
@@ -82,6 +87,7 @@ async function main(): Promise<void> {
     resolver,
     gate,
     quota,
+    usage,
     startTime: Date.now(),
     updateGauges,
   });
@@ -100,7 +106,8 @@ async function main(): Promise<void> {
 
   const shutdown = (signal: string): void => {
     logger.info({ signal }, 'shutting down');
-    server.close(() => process.exit(0));
+    // Flush pending usage rows so a restart does not lose the last few requests.
+    void usage.flush().finally(() => server.close(() => process.exit(0)));
     setTimeout(() => process.exit(1), 10_000).unref();
   };
 

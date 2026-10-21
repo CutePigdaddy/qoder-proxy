@@ -47,7 +47,16 @@ const RequestLogTable: React.FC<Props> = ({ rows }) => {
               const rate = billable === 0 ? 0 : (row.cacheHitTokens / billable) * 100;
               return (
                 <tr key={row.id}>
-                  <td className="mono">{dateTime(row.timestamp)}</td>
+                  <td className="mono">
+                    {row.status >= 400 && (
+                      <span
+                        className="fail-dot"
+                        title={`HTTP ${row.status}`}
+                        aria-label={`请求失败 HTTP ${row.status}`}
+                      />
+                    )}
+                    {dateTime(row.timestamp)}
+                  </td>
                   <td>{row.application}</td>
                   <td className="muted">{row.provider}</td>
                   <td>

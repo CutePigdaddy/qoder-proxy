@@ -16,6 +16,9 @@ const EnvSchema = z.object({
   BODY_LIMIT: z.coerce.number().int().positive().default(10 * 1024 * 1024),
   MODEL_FALLBACK: z.string().default('auto'),
   TOKEN_CACHE_PATH: z.string().default('.cache/tokens.json'),
+  // Per-request usage log backing the dashboard. Lives beside the token cache so
+  // it rides the same persisted volume; sees append-only writes.
+  USAGE_LOG_PATH: z.string().default('.cache/usage.jsonl'),
   QODER_QUOTA_TTL_MS: z.coerce.number().int().min(0).default(60_000),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   MODELS_CONFIG_PATH: z.string().default('config/models.json'),
@@ -60,6 +63,7 @@ export interface AppConfig {
   retryMaxWaitMs: number;
   bodyLimit: number;
   tokenCachePath: string;
+  usageLogPath: string;
   logLevel: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent';
   quotaTtlMs: number;
   tokenMarkerMode: 'move' | 'strip' | 'keep';
@@ -86,6 +90,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     retryMaxWaitMs: e.RETRY_MAX_WAIT_MS,
     bodyLimit: e.BODY_LIMIT,
     tokenCachePath: e.TOKEN_CACHE_PATH,
+    usageLogPath: e.USAGE_LOG_PATH,
     logLevel: e.LOG_LEVEL,
     quotaTtlMs: e.QODER_QUOTA_TTL_MS,
     tokenMarkerMode: e.TOKEN_MARKER_MODE,

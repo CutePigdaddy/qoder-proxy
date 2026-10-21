@@ -6,6 +6,7 @@ import type { QoderClient } from '../qoder/client.js';
 import type { CredentialStore } from '../qoder/credentialStore.js';
 import type { ModelCatalog } from '../qoder/modelCatalog.js';
 import type { QuotaService } from '../qoder/quota.js';
+import type { UsageStore } from '../obs/usageStore.js';
 
 export interface Deps {
   config: AppConfig;
@@ -16,6 +17,8 @@ export interface Deps {
   resolver: ModelResolver;
   gate: AdmissionGate;
   quota: QuotaService;
+  /** Records one row per chat request; backs /v1/usage/dashboard. */
+  usage: UsageStore;
   startTime: number;
   /** Push current concurrency/queue values into the exported gauges. */
   updateGauges: () => void;

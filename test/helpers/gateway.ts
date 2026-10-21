@@ -1,8 +1,11 @@
 import pino from 'pino';
 import type { Hono } from 'hono';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { AdmissionGate } from '../../src/concurrency/admission.js';
 import type { AppConfig } from '../../src/config.js';
 import type { IREvent, IRRequest } from '../../src/ir/types.js';
+import { UsageStore } from '../../src/obs/usageStore.js';
 import type { ModelListEntry } from '../../src/openai/modelResolver.js';
 import type { QoderClient, ResolvedModel } from '../../src/qoder/client.js';
 import { createApp } from '../../src/server/app.js';
@@ -20,6 +23,9 @@ import type { Deps } from '../../src/server/deps.js';
 
 export const API_KEY = 'sk-test';
 
+/** Unique suffix so parallel test files never share a usage log. */
+let harnessSeq = 0;
+
 export function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   return {
     pat: 'pt-test',
@@ -32,6 +38,7 @@ export function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     retryMaxWaitMs: 30_000,
     bodyLimit: 64 * 1024,
     tokenCachePath: '.cache/tokens.json',
+    usageLogPath: '.cache/usage.jsonl',
     logLevel: 'silent',
     quotaTtlMs: 60_000,
     tokenMarkerMode: 'move',
@@ -149,6 +156,10 @@ export function createHarness(options: HarnessOptions = {}): Harness {
         cached: false,
       }),
     } as unknown as Deps['quota'],
+    // In-memory only: tests never touch the real usage log on disk.
+    usage: new UsageStore({
+      path: join(tmpdir(), `qoder-usage-${process.pid}-${++harnessSeq}.jsonl`),
+    }),
     startTime: Date.now(),
     updateGauges: () => undefined,
   };
