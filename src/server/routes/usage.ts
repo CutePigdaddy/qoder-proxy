@@ -2,42 +2,51 @@ import type { Hono } from 'hono';
 import type { Deps } from '../deps.js';
 
 /**
- * 请求日志存储接口
+ * 请求明细（与 cc-switch 对齐）：时间 / 应用 / 供应商 / 模型 / 新增输入 / 输出 / 缓存命中
  */
-export interface RequestLog {
+export interface UsageRow {
   id: string;
+  /** Unix 毫秒时间戳 */
   timestamp: number;
+  /** 发起调用的客户端 */
+  application: string;
+  /** 上游供应商 */
+  provider: string;
   model: string;
-  status: number;
-  durationMs: number;
-  promptTokens: number;
-  completionTokens: number;
-  totalTokens: number;
+  /** 本轮新增（未命中缓存）的输入 token */
+  inputTokens: number;
+  /** 输出 token */
+  outputTokens: number;
+  /** 命中缓存的输入 token */
+  cacheHitTokens: number;
 }
 
-/**
- * 时间序列数据点
- */
 export interface TimeSeriesPoint {
   timestamp: number;
   value: number;
   label?: string;
 }
 
-/**
- * 按模型统计的数据
- */
 export interface ModelStats {
   model: string;
   requests: number;
-  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheHitTokens: number;
+  hitRate: number;
   avgDuration: number;
-  successRate: number;
 }
 
-/**
- * 仪表盘汇总数据
- */
+export interface CacheSummary {
+  /** 命中率 = cacheHitTokens / (cacheHitTokens + inputTokens) */
+  hitRate: number;
+  cacheHitTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  /** 命中率趋势 */
+  trend: TimeSeriesPoint[];
+}
+
 export interface DashboardData {
   summary: {
     totalRequests: number;
@@ -45,214 +54,137 @@ export interface DashboardData {
     avgDuration: number;
     errorRate: number;
   };
+  cache: CacheSummary;
   timeSeries: {
     requests: TimeSeriesPoint[];
     tokens: TimeSeriesPoint[];
     duration: TimeSeriesPoint[];
   };
   byModel: ModelStats[];
-  recentLogs: RequestLog[];
+  recentLogs: UsageRow[];
 }
 
-/**
- * 请求参数
- */
-export interface QueryParams {
-  hours?: number;
-  limit?: number;
-}
+const MOCK_APPLICATIONS = ['Claude Code', 'Codex', 'Cursor'];
+const MOCK_PROVIDERS = ['Qoder CN'];
+const MOCK_MODELS = ['Kimi-K3', 'Auto', 'DeepSeek-V3'];
 
-/** Mock data model names; replaced when real persistence lands. */
-const MOCK_MODELS = ['kimi-k3', 'qwen-plus', 'deepseek-v3'];
-
-function pickMockModel(i: number): string {
-  return MOCK_MODELS[i % MOCK_MODELS.length] ?? MOCK_MODELS[0] ?? 'unknown';
+function pick<T>(list: readonly T[], i: number, fallback: T): T {
+  return list[i % list.length] ?? fallback;
 }
 
 export function registerUsage(app: Hono, deps: Deps): void {
-  // 获取仪表盘统计数据
-  app.get('/v1/usage/dashboard', async (c) => {
+  /** 仪表盘汇总：指标 + 缓存 + 趋势 + 分模型 + 明细，一次请求取全。 */
+  app.get('/v1/usage/dashboard', (c) => {
     try {
-      const hours = parseInt(c.req.query('hours') || '24', 10);
-      const limit = parseInt(c.req.query('limit') || '50', 10);
-
-      // TODO: 从持久化存储读取数据
-      // 目前生成模拟数据用于演示
-      const data = generateMockData(hours, limit);
-
-      return c.json(data);
+      const hours = Number.parseInt(c.req.query('hours') || '24', 10);
+      const limit = Number.parseInt(c.req.query('limit') || '50', 10);
+      return c.json(
+        buildDashboard(
+          Number.isFinite(hours) ? hours : 24,
+          Number.isFinite(limit) ? limit : 50,
+        ),
+      );
     } catch (error) {
       deps.logger.error({ err: error }, 'usage dashboard failed');
-      return c.json(
-        { error: 'Failed to fetch usage data' },
-        500,
-      );
-    }
-  });
-
-  // 获取请求日志列表
-  app.get('/v1/usage/logs', async (c) => {
-    try {
-      const hours = parseInt(c.req.query('hours') || '24', 10);
-      const limit = parseInt(c.req.query('limit') || '100', 10);
-      const model = c.req.query('model');
-
-      // TODO: 从持久化存储读取数据
-      const logs = generateMockLogs(hours, limit, model);
-
-      return c.json({ logs });
-    } catch (error) {
-      deps.logger.error({ err: error }, 'usage logs failed');
-      return c.json(
-        { error: 'Failed to fetch logs' },
-        500,
-      );
-    }
-  });
-
-  // 获取按模型的统计
-  app.get('/v1/usage/models', async (c) => {
-    try {
-      const hours = parseInt(c.req.query('hours') || '24', 10);
-
-      // TODO: 从持久化存储聚合数据
-      const models = await getModelStats(hours);
-
-      return c.json(models);
-    } catch (error) {
-      deps.logger.error({ err: error }, 'usage models failed');
-      return c.json(
-        { error: 'Failed to fetch model stats' },
-        500,
-      );
+      return c.json({ error: 'Failed to fetch usage data' }, 500);
     }
   });
 }
 
 /**
- * 生成模拟数据（开发阶段使用）
- * TODO: 替换为真实数据存储和查询逻辑
+ * Mock 数据：真实持久化接上之前，用于验证前端形状与交互。
+ * 命中率取长上下文会话的真实量级（85%~99%），避免演示时出现不合理的 0%。
  */
-function generateMockData(hours: number, limit: number): DashboardData {
+function buildDashboard(hours: number, limit: number): DashboardData {
   const now = Date.now();
-  const interval = (hours * 3600 * 1000) / 24; // 每小时一个点
+  const buckets = Math.min(Math.max(hours, 1), 24);
+  const step = (hours * 3_600_000) / buckets;
 
-  // 汇总统计
-  const totalRequests = Math.floor(Math.random() * 1000) + 500;
-  const totalTokens = totalRequests * Math.floor(Math.random() * 2000) + 1000;
+  const trend: TimeSeriesPoint[] = Array.from({ length: buckets }, (_, i) => {
+    const ts = now - (buckets - 1 - i) * step;
+    return {
+      timestamp: ts,
+      value: Number((85 + Math.random() * 14).toFixed(1)),
+      label: labelOf(ts, hours),
+    };
+  });
+
+  const recentLogs: UsageRow[] = Array.from({ length: Math.min(limit, 50) }, (_, i) => {
+    const ts = now - i * 90_000;
+    return {
+      id: `req-${ts}-${i}`,
+      timestamp: ts,
+      application: pick(MOCK_APPLICATIONS, i, 'Claude Code'),
+      provider: pick(MOCK_PROVIDERS, i, 'Qoder CN'),
+      model: pick(MOCK_MODELS, i, 'Auto'),
+      inputTokens:
+        Math.random() > 0.75 ? 200 + Math.floor(Math.random() * 6_000) : Math.floor(Math.random() * 1_500),
+      outputTokens: 100 + Math.floor(Math.random() * 4_000),
+      cacheHitTokens: 8_000 + Math.floor(Math.random() * 120_000),
+    };
+  });
+
+  const inputTokens = recentLogs.reduce((n, r) => n + r.inputTokens, 0);
+  const outputTokens = recentLogs.reduce((n, r) => n + r.outputTokens, 0);
+  const cacheHitTokens = recentLogs.reduce((n, r) => n + r.cacheHitTokens, 0);
+  const billableInput = inputTokens + cacheHitTokens;
+
+  const byModel: ModelStats[] = MOCK_MODELS.map((model) => {
+    const rows = recentLogs.filter((r) => r.model === model);
+    const hit = rows.reduce((n, r) => n + r.cacheHitTokens, 0);
+    const fresh = rows.reduce((n, r) => n + r.inputTokens, 0);
+    return {
+      model,
+      requests: rows.length,
+      inputTokens: fresh,
+      outputTokens: rows.reduce((n, r) => n + r.outputTokens, 0),
+      cacheHitTokens: hit,
+      hitRate: hit + fresh === 0 ? 0 : Number(((hit / (hit + fresh)) * 100).toFixed(1)),
+      avgDuration: Number((1.2 + Math.random() * 2.5).toFixed(2)),
+    };
+  });
 
   return {
     summary: {
-      totalRequests,
-      totalTokens,
-      avgDuration: Math.random() * 3 + 1,
-      errorRate: Math.random() * 5,
+      totalRequests: recentLogs.length + Math.floor(Math.random() * 200),
+      totalTokens: billableInput + outputTokens,
+      avgDuration: Number((1.4 + Math.random() * 1.6).toFixed(2)),
+      errorRate: Number((Math.random() * 1.8).toFixed(1)),
+    },
+    cache: {
+      hitRate: billableInput === 0 ? 0 : Number(((cacheHitTokens / billableInput) * 100).toFixed(1)),
+      cacheHitTokens,
+      inputTokens,
+      outputTokens,
+      trend,
     },
     timeSeries: {
-      requests: Array.from({ length: 24 }, (_, i) => ({
-        timestamp: now - (23 - i) * interval,
-        value: Math.floor(Math.random() * 50) + 20,
-        label: new Date(now - (23 - i) * interval).toLocaleTimeString('zh-CN'),
-      })),
-      tokens: Array.from({ length: 24 }, (_, i) => ({
-        timestamp: now - (23 - i) * interval,
-        value: Math.floor(Math.random() * 50000) + 20000,
-        label: new Date(now - (23 - i) * interval).toLocaleTimeString('zh-CN'),
-      })),
-      duration: Array.from({ length: 24 }, (_, i) => ({
-        timestamp: now - (23 - i) * interval,
-        value: Number((Math.random() * 3 + 1).toFixed(2)),
-        label: new Date(now - (23 - i) * interval).toLocaleTimeString('zh-CN'),
-      })),
+      requests: series(buckets, step, now, hours, () => 20 + Math.floor(Math.random() * 60)),
+      tokens: series(buckets, step, now, hours, () => 40_000 + Math.floor(Math.random() * 260_000)),
+      duration: series(buckets, step, now, hours, () => Number((1.2 + Math.random() * 2).toFixed(2))),
     },
-    byModel: [
-      {
-        model: 'kimi-k3',
-        requests: 600,
-        totalTokens: 800000,
-        avgDuration: 2.5,
-        successRate: 98.9,
-      },
-      {
-        model: 'qwen-plus',
-        requests: 200,
-        totalTokens: 300000,
-        avgDuration: 2.0,
-        successRate: 97.5,
-      },
-      {
-        model: 'deepseek-v3',
-        requests: 150,
-        totalTokens: 250000,
-        avgDuration: 1.8,
-        successRate: 96.8,
-      },
-    ],
-    recentLogs: Array.from({ length: Math.min(limit, 20) }, (_, i) => ({
-      id: `log-${now - i * 60000}`,
-      timestamp: now - i * 60000,
-      model: pickMockModel(i),
-      status: Math.random() > 0.03 ? 200 : 429,
-      durationMs: Math.floor(Math.random() * 5000) + 500,
-      promptTokens: Math.floor(Math.random() * 2000) + 100,
-      completionTokens: Math.floor(Math.random() * 3000) + 200,
-      totalTokens: Math.floor(Math.random() * 5000) + 300,
-    })),
+    byModel,
+    recentLogs,
   };
 }
 
-/**
- * 生成模拟日志
- */
-function generateMockLogs(hours: number, limit: number, modelFilter?: string): RequestLog[] {
-  const now = Date.now();
-  const logs: RequestLog[] = [];
-
-  for (let i = 0; i < limit; i++) {
-    const model = modelFilter || pickMockModel(i);
-    logs.push({
-      id: `log-${now - i * 60000}`,
-      timestamp: now - i * 60000,
-      model,
-      status: Math.random() > 0.03 ? 200 : 429,
-      durationMs: Math.floor(Math.random() * 5000) + 500,
-      promptTokens: Math.floor(Math.random() * 2000) + 100,
-      completionTokens: Math.floor(Math.random() * 3000) + 200,
-      totalTokens: Math.floor(Math.random() * 5000) + 300,
-    });
-  }
-
-  return logs;
+function series(
+  buckets: number,
+  step: number,
+  now: number,
+  hours: number,
+  value: () => number,
+): TimeSeriesPoint[] {
+  return Array.from({ length: buckets }, (_, i) => {
+    const ts = now - (buckets - 1 - i) * step;
+    return { timestamp: ts, value: value(), label: labelOf(ts, hours) };
+  });
 }
 
-/**
- * 获取模型统计（TODO: 实现真实查询）
- */
-async function getModelStats(hours: number): Promise<ModelStats[]> {
-  const now = Date.now();
-  const interval = (hours * 3600 * 1000) / 24;
-
-  return [
-    {
-      model: 'kimi-k3',
-      requests: Math.floor(Math.random() * 500) + 300,
-      totalTokens: Math.floor(Math.random() * 500000) + 300000,
-      avgDuration: Number((Math.random() * 2 + 1.5).toFixed(2)),
-      successRate: Number((Math.random() * 2 + 97).toFixed(1)),
-    },
-    {
-      model: 'qwen-plus',
-      requests: Math.floor(Math.random() * 300) + 100,
-      totalTokens: Math.floor(Math.random() * 300000) + 150000,
-      avgDuration: Number((Math.random() * 1.5 + 1).toFixed(2)),
-      successRate: Number((Math.random() * 2 + 96).toFixed(1)),
-    },
-    {
-      model: 'deepseek-v3',
-      requests: Math.floor(Math.random() * 200) + 50,
-      totalTokens: Math.floor(Math.random() * 200000) + 100000,
-      avgDuration: Number((Math.random() * 1 + 0.8).toFixed(2)),
-      successRate: Number((Math.random() * 2 + 95).toFixed(1)),
-    },
-  ];
+function labelOf(ts: number, hours: number): string {
+  const d = new Date(ts);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return hours <= 24
+    ? `${pad(d.getHours())}:${pad(d.getMinutes())}`
+    : `${d.getMonth() + 1}/${d.getDate()}`;
 }

@@ -1,32 +1,38 @@
-// 请求日志接口
-export interface RequestLog {
+export interface UsageRow {
   id: string;
   timestamp: number;
+  application: string;
+  provider: string;
   model: string;
-  status: number;
-  durationMs: number;
-  promptTokens: number;
-  completionTokens: number;
-  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheHitTokens: number;
 }
 
-// 时间序列数据点
 export interface TimeSeriesPoint {
   timestamp: number;
   value: number;
   label?: string;
 }
 
-// 按模型统计的数据
 export interface ModelStats {
   model: string;
   requests: number;
-  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheHitTokens: number;
+  hitRate: number;
   avgDuration: number;
-  successRate: number;
 }
 
-// 仪表盘汇总数据
+export interface CacheSummary {
+  hitRate: number;
+  cacheHitTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  trend: TimeSeriesPoint[];
+}
+
 export interface DashboardData {
   summary: {
     totalRequests: number;
@@ -34,11 +40,12 @@ export interface DashboardData {
     avgDuration: number;
     errorRate: number;
   };
+  cache: CacheSummary;
   timeSeries: {
     requests: TimeSeriesPoint[];
     tokens: TimeSeriesPoint[];
     duration: TimeSeriesPoint[];
   };
   byModel: ModelStats[];
-  recentLogs: RequestLog[];
+  recentLogs: UsageRow[];
 }
