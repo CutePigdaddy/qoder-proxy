@@ -1,12 +1,10 @@
-# Build frontend
-FROM node:22-alpine AS frontend-builder
-WORKDIR /app/frontend
+FROM node:22-alpine AS frontend
+WORKDIR /build
 COPY frontend/package*.json ./
 RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-# Build backend
 FROM node:22-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
@@ -15,13 +13,13 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
-# Runtime
 FROM node:22-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package.json ./
+COPY --from=frontend /build/dist ./frontend/dist
 COPY config ./config
 RUN mkdir -p /app/.cache && chown -R node:node /app
 USER node

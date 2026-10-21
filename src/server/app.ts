@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
+import { serveStatic } from '@hono/node-server/serve-static';
 import { redactSecrets } from '../obs/logger.js';
 import { authMiddleware } from './middleware/auth.js';
 import { requestLogger } from './middleware/logging.js';
@@ -12,6 +13,11 @@ import { registerRoot } from './routes/root.js';
 import { registerUsage } from './routes/usage.js';
 import type { Deps } from './deps.js';
 
+// The built dashboard (vite output) is baked into the image at ./frontend/dist.
+// Files are served by name; requests outside this set fall through to the
+// JSON 404 below, which keeps the scanner surface narrow at the edge too.
+const DASHBOARD_ROOT = './frontend/dist';
+
 export function createApp(deps: Deps): Hono {
   const app = new Hono();
 
@@ -22,6 +28,17 @@ export function createApp(deps: Deps): Hono {
   registerHealth(app, deps);
   registerMetrics(app, deps);
   registerRoot(app);
+
+  // Dashboard static assets (built by `npm run build` in frontend/, baked into
+  // the image). serveStatic falls through when a file is missing, so unknown
+  // paths still land on the JSON 404 below.
+  app.get('/assets/*', serveStatic({ root: DASHBOARD_ROOT }));
+  app.get('/favicon.svg', serveStatic({ root: DASHBOARD_ROOT }));
+  app.get('/icons.svg', serveStatic({ root: DASHBOARD_ROOT }));
+  // SPA entry: any non-API GET that wants HTML gets the dashboard shell. The
+  // client router takes over from there.
+  app.get('/', serveStatic({ path: `${DASHBOARD_ROOT}/index.html` }));
+  app.get('/index.html', serveStatic({ path: `${DASHBOARD_ROOT}/index.html` }));
 
   // Auth runs first: an unauthenticated caller should not get us to buffer a
   // body on its behalf. `BODY_LIMIT` is enforced above the route because the

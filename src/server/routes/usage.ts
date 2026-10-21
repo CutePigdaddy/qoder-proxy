@@ -62,6 +62,13 @@ export interface QueryParams {
   limit?: number;
 }
 
+/** Mock data model names; replaced when real persistence lands. */
+const MOCK_MODELS = ['kimi-k3', 'qwen-plus', 'deepseek-v3'];
+
+function pickMockModel(i: number): string {
+  return MOCK_MODELS[i % MOCK_MODELS.length] ?? MOCK_MODELS[0] ?? 'unknown';
+}
+
 export function registerUsage(app: Hono, deps: Deps): void {
   // 获取仪表盘统计数据
   app.get('/v1/usage/dashboard', async (c) => {
@@ -184,7 +191,7 @@ function generateMockData(hours: number, limit: number): DashboardData {
     recentLogs: Array.from({ length: Math.min(limit, 20) }, (_, i) => ({
       id: `log-${now - i * 60000}`,
       timestamp: now - i * 60000,
-      model: ['kimi-k3', 'qwen-plus', 'deepseek-v3'][i % 3],
+      model: pickMockModel(i),
       status: Math.random() > 0.03 ? 200 : 429,
       durationMs: Math.floor(Math.random() * 5000) + 500,
       promptTokens: Math.floor(Math.random() * 2000) + 100,
@@ -202,7 +209,7 @@ function generateMockLogs(hours: number, limit: number, modelFilter?: string): R
   const logs: RequestLog[] = [];
 
   for (let i = 0; i < limit; i++) {
-    const model = modelFilter || ['kimi-k3', 'qwen-plus', 'deepseek-v3'][i % 3];
+    const model = modelFilter || pickMockModel(i);
     logs.push({
       id: `log-${now - i * 60000}`,
       timestamp: now - i * 60000,

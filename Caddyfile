@@ -4,21 +4,18 @@
 	@notEventStream not header Content-Type text/event-stream
 	encode @notEventStream zstd gzip
 
-	# Serve dashboard static files from backend container
-	@dashboard path /index.html /assets/*
-	handle @dashboard {
-		reverse_proxy host.docker.internal:3000 /usr/share/caddy{uri}
-	}
-
 	# This gateway only serves the routes below. Internet-wide scanners spend
 	# their day probing /.env, /.git/HEAD, /wp-login.php and friends; answering
 	# them here keeps them out of the app and out of its logs. Add new routes
 	# to this list or they will be rejected at the edge.
 	#
-	# /metrics is deliberately absent: it is unauthenticated and leaks model
-	# names, request volume and remaining quota. Scrape it over the compose
-	# network (http://qoder-proxy:3000/metrics) instead of the public port.
-	@unknown not path / /health /v1/*
+	# `/` and `/assets/*` serve the dashboard (baked into the qoder-proxy image
+	# and proxied below). `/metrics` is deliberately absent: it is unauthenticated
+	# and leaks model names, request volume and remaining quota. Scrape it over
+	# the compose network (http://qoder-proxy:3000/metrics) instead of the
+	# public port.
+	@known path / /index.html /favicon.svg /icons.svg /service /health /assets/* /v1/*
+	@unknown not @known
 	handle @unknown {
 		header Content-Type application/json
 		respond `{"error":{"message":"Not found","type":"invalid_request_error"}}` 404

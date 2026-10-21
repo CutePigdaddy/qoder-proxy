@@ -1,3 +1,76 @@
+/* API Key 配置页 */
+.key-setup {
+  max-width: 480px;
+  margin: 10vh auto 0;
+  background: white;
+  border-radius: 16px;
+  padding: 2.5rem;
+  box-shadow: 0 10px 25px -5px rgb(0 0 0 / 0.15);
+  text-align: center;
+}
+
+.key-setup h1 {
+  font-size: 1.6rem;
+  color: #1f2937;
+  margin-bottom: 0.75rem;
+}
+
+.key-setup p {
+  color: #6b7280;
+  margin-bottom: 1.5rem;
+}
+
+.key-form {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.key-form input {
+  flex: 1;
+  padding: 0.75rem 1rem;
+  border: 2px solid #e5e7eb;
+  border-radius: 8px;
+  font-size: 1rem;
+  transition: border-color 0.2s;
+}
+
+.key-form input:focus {
+  outline: none;
+  border-color: #6366f1;
+}
+
+.key-form button {
+  padding: 0.75rem 1.5rem;
+  background: #6366f1;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+  white-space: nowrap;
+}
+
+.key-form button:hover {
+  background: #4f46e5;
+}
+
+.key-change {
+  padding: 0.5rem 1rem;
+  background: rgba(255, 255, 255, 0.25);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.875rem;
+  transition: background 0.2s;
+}
+
+.key-change:hover {
+  background: rgba(255, 255, 255, 0.4);
+}
+
 /* 主容器 */
 .app-container {
   max-width: 1400px;
