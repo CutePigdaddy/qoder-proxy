@@ -123,3 +123,116 @@ describe('parseChatRequest', () => {
     ).toBe(false);
   });
 });
+
+describe('parseChatRequest client quirks', () => {
+  it('treats developer messages like system messages', () => {
+    // OpenAI's newer role name; SDKs send it for o-series style prompts.
+    const result = parseChatRequest({
+      model: 'auto',
+      messages: [
+        { role: 'developer', content: 'be terse' },
+        { role: 'user', content: 'hi' },
+      ],
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.system).toBe('be terse');
+    expect(result.value.messages).toHaveLength(1);
+  });
+
+  it('prefers max_completion_tokens over the deprecated max_tokens', () => {
+    const result = parseChatRequest({
+      model: 'auto',
+      messages: [{ role: 'user', content: 'hi' }],
+      max_tokens: 100,
+      max_completion_tokens: 2048,
+    });
+
+    expect(result.ok && result.value.maxTokens).toBe(2048);
+  });
+
+  it('accepts assistant messages with null content and tool calls', () => {
+    const result = parseChatRequest({
+      model: 'auto',
+      messages: [
+        { role: 'user', content: 'go' },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{ id: 'c1', type: 'function', function: { name: 'f', arguments: '{}' } }],
+        },
+      ],
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.messages[1]).toMatchObject({
+      role: 'assistant',
+      content: '',
+      toolCalls: [{ id: 'c1', name: 'f', arguments: {} }],
+    });
+  });
+
+  it('reads input_text parts used by newer clients', () => {
+    const result = parseChatRequest({
+      model: 'auto',
+      messages: [{ role: 'user', content: [{ type: 'input_text', text: 'hello' }] }],
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.messages[0]?.content).toBe('hello');
+  });
+
+  it('keeps the text when an image is not a base64 data url', () => {
+    // Remote URLs cannot be forwarded, so the image is dropped — but the turn
+    // must still reach the model instead of failing the whole request.
+    const result = parseChatRequest({
+      model: 'auto',
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'what is this?' },
+            { type: 'image_url', image_url: { url: 'https://example.com/a.png' } },
+          ],
+        },
+      ],
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.messages[0]?.content).toBe('what is this?');
+    expect(result.value.messages[0]?.parts).toBeUndefined();
+  });
+
+  it('ignores parameters it does not implement instead of rejecting', () => {
+    const result = parseChatRequest({
+      model: 'auto',
+      messages: [{ role: 'user', content: 'hi' }],
+      temperature: 0.2,
+      top_p: 0.9,
+      n: 1,
+      stop: ['\n'],
+      presence_penalty: 0.1,
+      user: 'abc',
+    });
+
+    // Every SDK sends a different subset of these; 400-ing would break clients
+    // for features that are simply not forwarded.
+    expect(result.ok).toBe(true);
+  });
+
+  it('keeps an empty system prompt out of the wire list', () => {
+    const result = parseChatRequest({
+      model: 'auto',
+      messages: [
+        { role: 'system', content: '' },
+        { role: 'user', content: 'hi' },
+      ],
+    });
+
+    expect(result.ok && result.value.system).toBeUndefined();
+  });
+});

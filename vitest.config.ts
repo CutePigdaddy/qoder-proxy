@@ -24,5 +24,11 @@ export default defineConfig({
   test: {
     include: ['test/**/*.test.ts'],
     environment: 'node',
+    // The default `forks` pool intermittently fails to write vitest's SSR module
+    // cache on Windows (`EPERM ... \Temp\...\ssr\...`) and then silently drops a
+    // whole test file from the run — the totals shrink while everything still
+    // reports "passed". The `threads` pool has been stable across repeated runs,
+    // and a suite that quietly skips files is worse than no suite.
+    pool: 'threads',
   },
 });

@@ -99,3 +99,36 @@ describe('CredentialStore.forceRefresh', () => {
     expect(calls.some((href) => href.includes('exchange'))).toBe(true);
   });
 });
+
+describe('CredentialStore single flight', () => {
+  it('refreshes once when concurrent requests all see an expired token', async () => {
+    let refreshCalls = 0;
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      const href = String(url);
+      if (href.includes('exchange')) {
+        // Expires well inside the refresh skew, so every read wants a reload.
+        return json({ token: 'tok-pat', refresh_token: 'jrt-pat', expires_in: 1_000 });
+      }
+      if (href.includes('userinfo')) {
+        return json({ id: 'u1', name: 'tester', email: 'tester@example.com' });
+      }
+      if (href.includes('refresh')) {
+        refreshCalls += 1;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return json({ token: `tok-${refreshCalls}`, refresh_token: 'jrt-next', expires_in: 1_000 });
+      }
+      throw new Error(`unexpected url: ${href}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const store = makeStore(tempDir());
+    await store.get();
+
+    // Refresh tokens are single-use: a second concurrent refresh would spend an
+    // already-spent token and break the chain for every later request.
+    const tokens = await Promise.all([store.get(), store.get(), store.get(), store.get()]);
+
+    expect(refreshCalls).toBe(1);
+    expect(new Set(tokens.map((token) => token.jobToken)).size).toBe(1);
+  });
+});
