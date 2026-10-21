@@ -1,6 +1,12 @@
 import type { ModelMapping } from '../config.js';
 import type { ResolvedModel } from '../qoder/client.js';
-import type { CatalogEntry, ModelCatalog } from '../qoder/modelCatalog.js';
+import type { CatalogEntry, CatalogPromotion, ModelCatalog } from '../qoder/modelCatalog.js';
+
+/**
+ * live: 配置与上游目录都有；config-only: 只在配置里，上游目录没有（调用可能被拒）；
+ * upstream-only: 上游新增、配置未映射，只能用 wire key 调用。
+ */
+export type ModelAvailability = 'live' | 'config-only' | 'upstream-only';
 
 export interface ModelListEntry {
   /** Name clients send as `model`. */
@@ -8,6 +14,19 @@ export interface ModelListEntry {
   displayName: string;
   /** Upstream wire key this id forwards to. */
   upstream: string;
+  /** 上游自己的显示名；与 id 不同说明配置里改过名（例如 MiniMax） */
+  upstreamDisplayName: string;
+  /** 单次请求可输入的最大 token；上游没给就为 null */
+  contextWindow: number | null;
+  /** 上游 context_config 暴露的档位（升序） */
+  contextWindows: number[];
+  maxOutputTokens: number;
+  capabilities: { reasoning: boolean; vision: boolean };
+  /** factor 是当前生效系数（促销后），originalFactor 是促销前 */
+  pricing: { factor: number | null; originalFactor: number | null; free: boolean };
+  promotion: CatalogPromotion | null;
+  isDefault: boolean;
+  availability: ModelAvailability;
 }
 
 const DEFAULT_MAX_OUTPUT = 32_768;
@@ -46,6 +65,37 @@ function fromMapping(
     isReasoning: mapping.isReasoning ?? entry?.isReasoning ?? false,
     maxOutputTokens: mapping.maxOutputTokens ?? entry?.maxOutputTokens ?? DEFAULT_MAX_OUTPUT,
     matched,
+  };
+}
+
+/** 目录行：把上游元数据与配置表合并成客户端可读的一条记录。 */
+function toListEntry(
+  id: string,
+  upstream: string,
+  entry: CatalogEntry | undefined,
+  availability: ModelAvailability,
+  mapping?: ModelMapping,
+): ModelListEntry {
+  return {
+    id,
+    displayName: id,
+    upstream,
+    upstreamDisplayName: entry?.displayName ?? upstream,
+    contextWindow: entry?.maxInputTokens ?? null,
+    contextWindows: entry?.contextWindows ?? [],
+    maxOutputTokens: mapping?.maxOutputTokens ?? entry?.maxOutputTokens ?? DEFAULT_MAX_OUTPUT,
+    capabilities: {
+      reasoning: mapping?.isReasoning ?? entry?.isReasoning ?? false,
+      vision: entry?.isVision ?? false,
+    },
+    pricing: {
+      factor: entry?.priceFactor ?? null,
+      originalFactor: entry?.originalPriceFactor ?? entry?.promotion?.beforeFactor ?? null,
+      free: entry?.isFree ?? false,
+    },
+    promotion: entry?.promotion ?? null,
+    isDefault: entry?.isDefault ?? false,
+    availability,
   };
 }
 
@@ -158,21 +208,38 @@ export class ModelResolver {
   /**
    * The catalog as clients should see it: curated display names first, then any
    * key the upstream added that we have not mapped yet.
+   *
+   * 去重按 **wire key** 而不是显示名：同一个 key 在配置和上游可能有两个名字
+   * （`mmodel` 既是配置里的 MiniMax-M2.7，也是上游的 MiniMax-M3.1-Flash），
+   * 按名字去重会把同一个模型列出两遍。
    */
-  async list(): Promise<ModelListEntry[]> {
-    const entries = await this.opts.catalog.list();
-    const seen = new Set<string>();
+  async list(force = false): Promise<ModelListEntry[]> {
+    const entries = await this.opts.catalog.list(force);
     const out: ModelListEntry[] = [];
+    const seen = new Set<string>();
 
-    const push = (id: string, upstream: string): void => {
-      const marker = normalise(id);
-      if (!marker || seen.has(marker)) return;
-      seen.add(marker);
-      out.push({ id, displayName: id, upstream });
+    const push = (
+      id: string,
+      upstream: string,
+      entry: CatalogEntry | undefined,
+      availability: ModelAvailability,
+      mapping?: ModelMapping,
+    ) => {
+      if (seen.has(upstream)) return;
+      seen.add(upstream);
+      out.push(toListEntry(id, upstream, entry, availability, mapping));
     };
 
-    for (const mapping of this.opts.models ?? []) push(mapping.id, mapping.upstream);
-    for (const entry of entries) push(entry.displayName || entry.key, entry.key);
+    for (const mapping of this.opts.models ?? []) {
+      const entry =
+        entries.find((e) => e.key === mapping.upstream) ??
+        entries.find((e) => normalise(e.key) === normalise(mapping.upstream));
+      push(mapping.id, mapping.upstream, entry, entry ? 'live' : 'config-only', mapping);
+    }
+
+    for (const entry of entries) {
+      push(entry.displayName || entry.key, entry.key, entry, 'upstream-only');
+    }
 
     return out;
   }

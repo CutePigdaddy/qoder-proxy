@@ -59,6 +59,24 @@ export function resolvedModel(overrides: Partial<ResolvedModel> = {}): ResolvedM
   };
 }
 
+/** Directory row with every metadata field defaulted, so tests only state what matters. */
+export function modelListEntry(overrides: Partial<ModelListEntry> & { id: string }): ModelListEntry {
+  return {
+    displayName: overrides.id,
+    upstream: 'qmodel_test',
+    upstreamDisplayName: overrides.id,
+    contextWindow: null,
+    contextWindows: [],
+    maxOutputTokens: 4096,
+    capabilities: { reasoning: false, vision: false },
+    pricing: { factor: null, originalFactor: null, free: false },
+    promotion: null,
+    isDefault: false,
+    availability: 'live',
+    ...overrides,
+  };
+}
+
 export type ChatFn = (
   req: IRRequest,
   model: ResolvedModel,
@@ -134,7 +152,7 @@ export function createHarness(options: HarnessOptions = {}): Harness {
           : resolvedModel();
       },
       list: async (): Promise<ModelListEntry[]> =>
-        options.models ?? [{ id: model.id, displayName: model.id, upstream: model.key }],
+        options.models ?? [modelListEntry({ id: model.id, upstream: model.key })],
     } as unknown as Deps['resolver'],
     gate,
     quota: {

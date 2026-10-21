@@ -17,15 +17,23 @@ interface AutoRefreshState {
  * - 不拦截并发：切换时间范围时用户期待立刻看到新数据，旧请求由调用方的
  *   序号守卫丢弃（见 App 里的 reqRef）。
  */
-export function useAutoRefresh(task: () => Promise<void>, intervalMs: number): AutoRefreshState {
+export function useAutoRefresh(
+  task: () => Promise<void>,
+  intervalMs: number,
+  enabled = true,
+): AutoRefreshState {
   const taskRef = useRef(task);
   taskRef.current = task;
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
 
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
   const seq = useRef(0);
 
   const run = useCallback(async () => {
+    // 切到别的视图后不再打接口：手动 refresh 也跟着失效，由调用方自行触发
+    if (!enabledRef.current) return;
     const id = ++seq.current;
     setRefreshing(true);
     try {
@@ -43,6 +51,8 @@ export function useAutoRefresh(task: () => Promise<void>, intervalMs: number): A
   }, [run]);
 
   useEffect(() => {
+    if (!enabled) return;
+
     let timer = 0;
 
     const tick = () => {
@@ -69,7 +79,7 @@ export function useAutoRefresh(task: () => Promise<void>, intervalMs: number): A
       document.removeEventListener('visibilitychange', onVisibility);
       if (timer) window.clearInterval(timer);
     };
-  }, [intervalMs, run]);
+  }, [intervalMs, run, enabled]);
 
   return { refresh, lastUpdated, refreshing };
 }

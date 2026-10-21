@@ -158,7 +158,8 @@ describe('UsageStore', () => {
     const store = newStore({ path, cap: 2, maxBytes: 200 });
     for (let i = 0; i < 8; i++) store.record(event({ ts: NOW - i * 1_000 }));
 
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // 等写盘队列落定，而不是固定 sleep：并行跑全量测试时 100ms 会不够
+    await store.flush();
 
     const text = await readFile(path, 'utf8');
     const lines = text.split('\n').filter(Boolean);

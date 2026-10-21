@@ -95,6 +95,58 @@ function dashboard(hours) {
   };
 }
 
+/**
+ * 模型目录 mock：字段与 /v1/models 的真实响应一致，值取自线上上游
+ * （包括 3 个「只在配置里」的模型，用来检查告警条）。
+ */
+function models() {
+  const row = (id, upstream, ctx, opts = {}) => ({
+    id,
+    object: 'model',
+    created: 0,
+    owned_by: 'qoder',
+    display_name: id,
+    upstream_model: upstream,
+    upstream_display_name: opts.upstreamName ?? id,
+    context_window: ctx,
+    context_windows: ctx === null ? [] : (opts.windows ?? [ctx]),
+    max_output_tokens: 32768,
+    capabilities: { reasoning: opts.reasoning ?? true, vision: opts.vision ?? true },
+    pricing: { factor: opts.price === undefined ? 0.1 : opts.price, originalFactor: opts.original ?? null, free: opts.free ?? false },
+    promotion: opts.promo ?? null,
+    is_default: opts.isDefault ?? false,
+    availability: opts.availability ?? 'live',
+    usage: opts.usage ?? null,
+  });
+
+  return {
+    object: 'list',
+    data: [
+      row('Auto', 'auto', 200000, { price: 0.5, isDefault: true, usage: { requests: 11, inputTokens: 96000, cachedTokens: 780000, outputTokens: 35000, hitRate: 89.5 } }),
+      row('Qwen3.8-Max', 'qmodel_38max', 180000, {
+        price: 0.2,
+        windows: [200000, 400000, 1000000],
+        promo: { active: true, badge: '错峰 4 折', description: '错峰时段4折优惠（10 PM-8 AM UTC+8）', discountFactor: 0.4, beforeFactor: 0.5, window: '22:00–08:00' },
+      }),
+      row('Qwen3.8-Flash', 'qfmodel', 180000, { price: 0, original: 0.1, free: true, usage: { requests: 4, inputTokens: 9042, cachedTokens: 9012, outputTokens: 320, hitRate: 49.9 } }),
+      row('Qwen3.7-Max', 'qmodel_latest', null, { price: null, availability: 'config-only' }),
+      row('Qwen3.7-Plus', 'qmodel', 180000, {
+        price: 0.1,
+        promo: { active: true, badge: '错峰 5 折', description: '错峰时段5折优惠', discountFactor: 0.5, beforeFactor: 0.2, window: '22:00–08:00' },
+      }),
+      row('Qwen3.7-Flash', 'q37fmodel', null, { price: null, availability: 'config-only' }),
+      row('DeepSeek-V4-Pro', 'dmodel', 96000, { price: 0.5 }),
+      row('DeepSeek-Flash', 'dfmodel', 180000, { price: 0, original: 0.1, free: true, reasoning: false }),
+      row('GLM-5.3', 'gmodel', 180000, { price: 0.8 }),
+      row('GLM-5.3-Flash', 'gfmodel', 1000000, { price: 0.1 }),
+      row('GLM-5.2', 'gm51model', null, { price: null, availability: 'config-only' }),
+      row('Kimi-K3', 'kmodel_latest', 180000, { price: 1.4, reasoning: false }),
+      row('Kimi-K2.8-Preview', 'kmodel', 180000, { price: 0.8 }),
+      row('MiniMax-M2.7', 'mmodel', 180000, { price: 0.1, reasoning: false, upstreamName: 'MiniMax-M3.1-Flash' }),
+    ],
+  };
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
 
@@ -117,6 +169,12 @@ const server = createServer(async (req, res) => {
         res.writeHead(502, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: String(error) }));
       }
+      return;
+    }
+
+    if (url.pathname === '/v1/models') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(models()));
       return;
     }
 

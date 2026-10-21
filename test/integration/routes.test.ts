@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chatBody, createHarness } from '../helpers/gateway.js';
+import { chatBody, createHarness, modelListEntry } from '../helpers/gateway.js';
 
 /**
  * Routes around the chat endpoint.
@@ -26,7 +26,7 @@ describe('GET /health', () => {
 describe('GET /v1/models', () => {
   it('lists the curated names in OpenAI list shape', async () => {
     const harness = createHarness({
-      models: [{ id: 'Test-Model', displayName: 'Test-Model', upstream: 'qmodel_test' }],
+      models: [modelListEntry({ id: 'Test-Model', upstream: 'qmodel_test' })],
     });
     const response = await harness.get('/v1/models');
     const body = (await response.json()) as {

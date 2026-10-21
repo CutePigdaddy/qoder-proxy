@@ -4,6 +4,20 @@ import { buildCosyHeadersFor } from './cosySigner.js';
 import type { CredentialStore } from './credentialStore.js';
 import type { Endpoints } from './endpoints.js';
 
+/** 上游的限时促销（错峰折扣），字段按需取用，原文保留在 API 之外。 */
+export interface CatalogPromotion {
+  active: boolean;
+  /** 本地化短标，优先中文，例如「错峰 4 折」 */
+  badge?: string;
+  description?: string;
+  /** 折后价系数，用于核对 priceFactor 是折后值 */
+  discountFactor?: number;
+  /** 打折前的系数，用于在界面上划掉原价 */
+  beforeFactor?: number;
+  /** 生效时段，例如 22:00–08:00 */
+  window?: string;
+}
+
 export interface CatalogEntry {
   /** Wire key the chat endpoint expects. */
   key: string;
@@ -12,6 +26,18 @@ export interface CatalogEntry {
   maxOutputTokens: number;
   thinkingConfig?: unknown;
   contextConfig?: unknown;
+  /** 单次请求可输入的最大 token；缺省时退化为 context_config 里最大档 */
+  maxInputTokens?: number;
+  /** context_config 暴露的上下文档位（升序），例如 [200000, 400000, 1000000] */
+  contextWindows?: number[];
+  isVision?: boolean;
+  /** 计费系数，与上游口径一致（Auto 0.5、Kimi-K3 1.4） */
+  priceFactor?: number | null;
+  /** 促销前的系数；有值时说明 priceFactor 已是折后价 */
+  originalPriceFactor?: number | null;
+  isFree?: boolean;
+  isDefault?: boolean;
+  promotion?: CatalogPromotion | null;
 }
 
 const CACHE_TTL_MS = 10 * 60_000;
@@ -31,11 +57,35 @@ const DEFAULT_MAX_OUTPUT = 32_768;
  * `performance`) only produces `400` once the catalog fetch fails.
  */
 const FALLBACK_ENTRIES: CatalogEntry[] = [
-  { key: 'auto', displayName: 'Auto', isReasoning: false, maxOutputTokens: DEFAULT_MAX_OUTPUT },
-  { key: 'qmodel_latest', displayName: 'Qwen3.7-Max', isReasoning: true, maxOutputTokens: DEFAULT_MAX_OUTPUT },
-  { key: 'qmodel', displayName: 'Qwen3.7-Plus', isReasoning: false, maxOutputTokens: DEFAULT_MAX_OUTPUT },
-  { key: 'q37fmodel', displayName: 'Qwen3.7-Flash', isReasoning: false, maxOutputTokens: DEFAULT_MAX_OUTPUT },
-  { key: 'dmodel', displayName: 'DeepSeek-V4-Pro', isReasoning: true, maxOutputTokens: DEFAULT_MAX_OUTPUT },
+  { key: 'auto', displayName: 'Auto', isReasoning: false, maxOutputTokens: DEFAULT_MAX_OUTPUT, contextWindows: [] },
+  {
+    key: 'qmodel_latest',
+    displayName: 'Qwen3.7-Max',
+    isReasoning: true,
+    maxOutputTokens: DEFAULT_MAX_OUTPUT,
+    contextWindows: [],
+  },
+  {
+    key: 'qmodel',
+    displayName: 'Qwen3.7-Plus',
+    isReasoning: false,
+    maxOutputTokens: DEFAULT_MAX_OUTPUT,
+    contextWindows: [],
+  },
+  {
+    key: 'q37fmodel',
+    displayName: 'Qwen3.7-Flash',
+    isReasoning: false,
+    maxOutputTokens: DEFAULT_MAX_OUTPUT,
+    contextWindows: [],
+  },
+  {
+    key: 'dmodel',
+    displayName: 'DeepSeek-V4-Pro',
+    isReasoning: true,
+    maxOutputTokens: DEFAULT_MAX_OUTPUT,
+    contextWindows: [],
+  },
 ];
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -62,6 +112,52 @@ function extractEntries(json: unknown, depth = 0): unknown[] {
   return [];
 }
 
+function asNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** 上游文案是 {zh, en} 结构，取中文优先，退化到英文或原字符串。 */
+function pickLocalised(value: unknown): string | undefined {
+  if (typeof value === 'string') return value.trim() || undefined;
+  const record = asRecord(value);
+  if (!record) return undefined;
+  for (const key of ['zh', 'zh-CN', 'zh_cn', 'en']) {
+    const text = record[key];
+    if (typeof text === 'string' && text.trim()) return text.trim();
+  }
+  return undefined;
+}
+
+/** context_config 是 { '200K': { token_count: 200000 }, ... }，只关心档位数值。 */
+function extractContextWindows(raw: unknown): number[] {
+  const record = asRecord(raw);
+  if (!record) return [];
+  const sizes = new Set<number>();
+  for (const value of Object.values(record)) {
+    const entry = asRecord(value);
+    const size = asNumber(entry?.token_count ?? entry?.tokenCount ?? value);
+    if (size !== null && size > 0) sizes.add(size);
+  }
+  return [...sizes].sort((a, b) => a - b);
+}
+
+function toPromotion(raw: unknown): CatalogPromotion | null {
+  const record = asRecord(raw);
+  if (!record || record.active !== true) return null;
+  const start = typeof record.window_start === 'string' ? record.window_start : undefined;
+  const end = typeof record.window_end === 'string' ? record.window_end : undefined;
+  return {
+    active: true,
+    badge: pickLocalised(record.badge),
+    description: pickLocalised(record.description),
+    discountFactor: asNumber(record.discount_factor) ?? undefined,
+    beforeFactor: asNumber(record.before_promotion_price_factor) ?? undefined,
+    window: start && end ? `${start}–${end}` : undefined,
+  };
+}
+
 function toEntry(raw: unknown): CatalogEntry | null {
   const record = asRecord(raw);
   if (!record) return null;
@@ -74,6 +170,8 @@ function toEntry(raw: unknown): CatalogEntry | null {
 
   const display = record.display_name ?? record.displayName ?? record.name ?? key;
   const maxOut = Number(record.max_output_tokens ?? record.maxOutputTokens ?? 0);
+  const contextWindows = extractContextWindows(record.context_config ?? record.contextConfig);
+  const maxInput = asNumber(record.max_input_tokens ?? record.maxInputTokens) ?? contextWindows.at(-1) ?? null;
 
   return {
     key,
@@ -82,6 +180,14 @@ function toEntry(raw: unknown): CatalogEntry | null {
     maxOutputTokens: Number.isFinite(maxOut) && maxOut > 0 ? maxOut : DEFAULT_MAX_OUTPUT,
     thinkingConfig: record.thinking_config ?? record.thinkingConfig,
     contextConfig: record.context_config ?? record.contextConfig,
+    maxInputTokens: maxInput ?? undefined,
+    contextWindows,
+    isVision: Boolean(record.is_vl ?? record.isVision ?? false),
+    priceFactor: asNumber(record.price_factor ?? record.priceFactor),
+    originalPriceFactor: asNumber(record.original_price_factor ?? record.originalPriceFactor),
+    isFree: Boolean(record.is_free ?? record.isFree ?? false),
+    isDefault: Boolean(record.is_default ?? record.isDefault ?? false),
+    promotion: toPromotion(record.promotion),
   };
 }
 

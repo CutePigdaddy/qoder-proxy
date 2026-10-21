@@ -109,3 +109,86 @@ describe('ModelResolver', () => {
     expect(ids.filter((id) => id.toLowerCase() === 'auto')).toHaveLength(1);
   });
 });
+
+describe('ModelResolver.list metadata', () => {
+  const catalogEntries: CatalogEntry[] = [
+    {
+      key: 'auto',
+      displayName: 'Auto',
+      isReasoning: true,
+      maxOutputTokens: 32768,
+      maxInputTokens: 200000,
+      isVision: true,
+      priceFactor: 0.5,
+      isDefault: true,
+    },
+    {
+      key: 'mmodel',
+      displayName: 'MiniMax-M3.1-Flash',
+      isReasoning: false,
+      maxOutputTokens: 8192,
+      maxInputTokens: 180000,
+      isVision: true,
+      priceFactor: 0.1,
+    },
+    { key: 'dmodel', displayName: 'DeepSeek-V4-Pro', isReasoning: true, maxOutputTokens: 131072 },
+    { key: 'extra', displayName: 'Upstream-Only', isReasoning: false, maxOutputTokens: 4096, priceFactor: 0.8 },
+  ];
+
+  const resolver = new ModelResolver({
+    catalog: { list: async () => catalogEntries } as unknown as ModelCatalog,
+    models: [
+      { id: 'Auto', upstream: 'auto' },
+      // 配置里的名字与上游显示名不同，同一个 wire key
+      { id: 'MiniMax-M2.7', upstream: 'mmodel' },
+      // 配置里有、上游目录没有
+      { id: 'Qwen3.7-Max', upstream: 'qmodel_latest' },
+      { id: 'DeepSeek-V4-Pro', upstream: 'dmodel' },
+    ],
+    aliases: {},
+    fallback: 'Auto',
+  });
+
+  it('dedupes by wire key and keeps the curated name', async () => {
+    const rows = (await resolver.list()).filter((entry) => entry.upstream === 'mmodel');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.id).toBe('MiniMax-M2.7');
+    // 上游叫 M3.1-Flash，配置叫 M2.7，两个名字都要能查到
+    expect(rows[0]?.upstreamDisplayName).toBe('MiniMax-M3.1-Flash');
+  });
+
+  it('marks models the upstream does not list as config-only', async () => {
+    const missing = (await resolver.list()).find((entry) => entry.upstream === 'qmodel_latest');
+    expect(missing?.availability).toBe('config-only');
+    expect(missing?.contextWindow).toBeNull();
+  });
+
+  it('marks uncurated upstream models as upstream-only', async () => {
+    const extra = (await resolver.list()).find((entry) => entry.upstream === 'extra');
+    expect(extra?.availability).toBe('upstream-only');
+  });
+
+  it('carries pricing, capabilities and context through', async () => {
+    const auto = (await resolver.list()).find((entry) => entry.id === 'Auto');
+    expect(auto?.contextWindow).toBe(200000);
+    expect(auto?.capabilities).toEqual({ reasoning: true, vision: true });
+    expect(auto?.pricing.factor).toBe(0.5);
+    expect(auto?.isDefault).toBe(true);
+  });
+
+  it('forwards the force flag so the panel refresh bypasses the TTL', async () => {
+    const seen: boolean[] = [];
+    const local = new ModelResolver({
+      catalog: {
+        list: async (force = false) => {
+          seen.push(force);
+          return catalogEntries;
+        },
+      } as unknown as ModelCatalog,
+      aliases: {},
+      fallback: 'Auto',
+    });
+    await local.list(true);
+    expect(seen).toEqual([true]);
+  });
+});

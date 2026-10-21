@@ -60,6 +60,72 @@ describe('parseCatalogPayload', () => {
     expect(parseCatalogPayload({})).toEqual([]);
     expect(parseCatalogPayload({ chat: [{}] })).toEqual([]);
   });
+
+  it('keeps the pricing, vision and context metadata the panel shows', () => {
+    const [entry] = parseCatalogPayload({
+      chat: [
+        {
+          key: 'qmodel_38max',
+          display_name: 'Qwen3.8-Max',
+          is_vl: true,
+          is_reasoning: true,
+          price_factor: 0.2,
+          is_free: false,
+          is_default: false,
+          max_input_tokens: 180000,
+          context_config: {
+            '1M': { token_count: 1000000 },
+            '200K': { token_count: 200000, is_default: true },
+            '400K': { token_count: 400000 },
+          },
+          promotion: {
+            active: true,
+            badge: { zh: '错峰 4 折', en: 'Off-Peak 60% off' },
+            description: { zh: '错峰时段4折优惠' },
+            discount_factor: 0.4,
+            before_promotion_price_factor: 0.5,
+            window_start: '22:00',
+            window_end: '08:00',
+          },
+        },
+      ],
+    });
+
+    expect(entry?.isVision).toBe(true);
+    expect(entry?.priceFactor).toBe(0.2);
+    expect(entry?.maxInputTokens).toBe(180000);
+    // 档位去重升序，便于界面上列出来给用户选
+    expect(entry?.contextWindows).toEqual([200000, 400000, 1000000]);
+    expect(entry?.promotion).toMatchObject({
+      active: true,
+      badge: '错峰 4 折',
+      discountFactor: 0.4,
+      beforeFactor: 0.5,
+      window: '22:00–08:00',
+    });
+  });
+
+  it('ignores an inactive promotion and falls back to the largest context tier', () => {
+    const [entry] = parseCatalogPayload({
+      chat: [
+        {
+          key: 'free-one',
+          is_free: true,
+          price_factor: 0,
+          original_price_factor: 0.1,
+          context_config: { '96K': { token_count: 96000 } },
+          promotion: { active: false, badge: { zh: '不该出现' } },
+        },
+      ],
+    });
+
+    expect(entry?.promotion).toBeNull();
+    expect(entry?.isFree).toBe(true);
+    expect(entry?.priceFactor).toBe(0);
+    expect(entry?.originalPriceFactor).toBe(0.1);
+    // 上游没给 max_input_tokens 时退化为 context_config 的最大档
+    expect(entry?.maxInputTokens).toBe(96000);
+  });
 });
 
 const endpoints: Endpoints = {
