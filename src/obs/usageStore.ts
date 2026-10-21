@@ -17,6 +17,11 @@ export interface UsageRecord {
   outputTokens: number;
   durationMs: number;
   status: number;
+  /**
+   * 原始 User-Agent（截断），只落在日志文件里、不经 API 暴露。
+   * 用途：`application` 归类不准时能反查是哪个客户端，不必再猜。
+   */
+  ua?: string;
 }
 
 interface Options {
@@ -151,6 +156,7 @@ function parse(line: string): UsageRecord | null {
       outputTokens: num(raw.outputTokens),
       durationMs: num(raw.durationMs),
       status: num(raw.status) || 200,
+      ...(typeof raw.ua === 'string' ? { ua: raw.ua } : {}),
     };
   } catch {
     return null;
@@ -168,12 +174,14 @@ function num(value: unknown): number {
 export function inferApplication(userAgent: string | undefined): string {
   if (!userAgent) return '未知';
   const ua = userAgent.toLowerCase();
-  if (ua.includes('claude')) return 'Claude Code';
+  if (ua.includes('claude') || ua.includes('anthropic')) return 'Claude Code';
   if (ua.includes('codex')) return 'Codex';
   if (ua.includes('cursor')) return 'Cursor';
   if (ua.includes('kilocode') || ua.includes('cline') || ua.includes('roo')) return 'Cline 系';
   if (ua.includes('python') || ua.includes('openai-python')) return 'Python SDK';
   if (ua.includes('node') || ua.includes('undici') || ua.includes('axios')) return 'Node SDK';
+  if (ua.includes('go-http-client')) return 'Go 客户端';
+  if (ua.includes('okhttp')) return 'OkHttp 客户端';
   if (ua.includes('curl')) return 'curl';
   return '其他客户端';
 }

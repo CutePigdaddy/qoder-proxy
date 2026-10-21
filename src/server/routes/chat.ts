@@ -45,16 +45,18 @@ export function registerChat(app: Hono, deps: Deps): void {
       // upstream usage frame, so "新增输入" is prompt minus cache hits.
       const prompt = tokens?.prompt ?? 0;
       const cached = tokens?.cached ?? 0;
+      const ua = c.req.header('user-agent');
       deps.usage.record({
         ts: Date.now(),
         model: modelKey,
-        application: inferApplication(c.req.header('user-agent')),
+        application: inferApplication(ua),
         provider: 'Qoder CN',
         inputTokens: Math.max(0, prompt - cached),
         cachedTokens: cached,
         outputTokens: tokens?.completion ?? 0,
         durationMs,
         status: Number(status) || 0,
+        ...(ua ? { ua: ua.slice(0, 160) } : {}),
       });
     };
 
