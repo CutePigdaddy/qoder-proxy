@@ -45,6 +45,9 @@ const RequestLogTable: React.FC<Props> = ({ rows }) => {
             {rows.map((row) => {
               const billable = row.inputTokens + row.cacheHitTokens;
               const rate = billable === 0 ? 0 : (row.cacheHitTokens / billable) * 100;
+              // 首次写入缓存的那次调用必然是 0%，标红会让人以为缓存坏了；
+              // 只有真正命中过才按分档上色，没命中一律中性。
+              const tone = row.cacheHitTokens === 0 ? 'neutral' : hitTone(rate);
               return (
                 <tr key={row.id}>
                   <td className="mono">
@@ -66,7 +69,11 @@ const RequestLogTable: React.FC<Props> = ({ rows }) => {
                   <td className="num mono">{grouped(row.outputTokens)}</td>
                   <td className="num mono">{grouped(row.cacheHitTokens)}</td>
                   <td className="num mono">
-                    <span className={`rate tone-${hitTone(rate)}`}>{percent(rate, 0)}</span>
+                    {billable === 0 ? (
+                      <span className="muted">—</span>
+                    ) : (
+                      <span className={`rate tone-${tone}`}>{percent(rate, 0)}</span>
+                    )}
                   </td>
                 </tr>
               );
