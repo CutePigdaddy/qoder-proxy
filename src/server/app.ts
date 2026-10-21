@@ -9,6 +9,7 @@ import { registerMetrics } from './routes/metrics.js';
 import { registerModels } from './routes/models.js';
 import { registerQuota } from './routes/quota.js';
 import { registerRoot } from './routes/root.js';
+import { registerUsage } from './routes/usage.js';
 import type { Deps } from './deps.js';
 
 export function createApp(deps: Deps): Hono {
@@ -46,6 +47,7 @@ export function createApp(deps: Deps): Hono {
   registerChat(app, deps);
   registerModels(app, deps);
   registerQuota(app, deps);
+  registerUsage(app, deps);
 
   app.notFound((c) =>
     c.json(
