@@ -20,6 +20,15 @@
 		respond `{"error":{"message":"Not found","type":"invalid_request_error"}}` 404
 	}
 
+	# Vite 的资源名带内容哈希，可以永久缓存；HTML 必须每次回源校验，
+	# 否则新版本发布后浏览器还拿着旧哈希指向已删除的 chunk。
+	# 这条链路跨境只有几 KB/s，重复下载 200KB 脚本就是「打开很慢」的主因。
+	@assetFile path /assets/*
+	header @assetFile Cache-Control "public, max-age=31536000, immutable"
+
+	@document path / /index.html
+	header @document Cache-Control "no-cache"
+
 	reverse_proxy qoder-proxy:3000 {
 		# Disable response buffering so SSE chunks reach the client immediately.
 		flush_interval -1

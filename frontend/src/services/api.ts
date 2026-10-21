@@ -1,7 +1,7 @@
-import axios from 'axios';
 import type { DashboardData } from '../types';
 
 const API_KEY_STORAGE = 'qoder-proxy-api-key';
+const TIMEOUT_MS = 20_000;
 
 export function getStoredKey(): string {
   return localStorage.getItem(API_KEY_STORAGE) ?? '';
@@ -15,24 +15,42 @@ export function clearStoredKey(): void {
   localStorage.removeItem(API_KEY_STORAGE);
 }
 
-const http = axios.create({ timeout: 20_000 });
+/** 带状态码的错误，交给 describeError 统一转成可展示文案。 */
+export class ApiError extends Error {
+  readonly status: number;
 
-/** 同源请求：部署在网关后时 `/v1/*` 由同一域名提供。 */
-export async function fetchDashboard(hours: number, apiKey: string): Promise<DashboardData> {
-  const { data } = await http.get<DashboardData>('/v1/usage/dashboard', {
-    params: { hours },
-    headers: { Authorization: `Bearer ${apiKey}` },
-  });
-  return data;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
 }
 
-/** 把 axios 错误收敛成一句可直接展示的文案。 */
-export function describeError(error: unknown): string {
-  if (axios.isAxiosError(error)) {
-    if (error.response?.status === 401) return 'API Key 无效，请重新填写';
-    if (error.response?.status === 503) return '网关尚未配置 PROXY_API_KEY';
-    if (error.code === 'ECONNABORTED') return '请求超时，请重试';
-    return `请求失败（HTTP ${error.response?.status ?? '网络错误'}）`;
+/**
+ * 同源请求：部署在网关后时 `/v1/*` 由同一域名提供。
+ * 用原生 fetch 而非 axios——首屏只有几百 KB 的传输预算，不值得为一次 GET 带一个库。
+ */
+export async function fetchDashboard(hours: number, apiKey: string): Promise<DashboardData> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    const res = await fetch(`/v1/usage/dashboard?hours=${hours}`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
+    return (await res.json()) as DashboardData;
+  } finally {
+    clearTimeout(timer);
   }
-  return '加载数据失败';
+}
+
+export function describeError(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.status === 401) return 'API Key 无效，请重新填写';
+    if (error.status === 503) return '网关尚未配置 PROXY_API_KEY';
+    return `请求失败（HTTP ${error.status}）`;
+  }
+  if (error instanceof DOMException && error.name === 'AbortError') return '请求超时，请重试';
+  return '加载失败，请检查网络后重试';
 }

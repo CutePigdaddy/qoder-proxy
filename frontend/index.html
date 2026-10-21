@@ -13,10 +13,60 @@
         margin: 0;
         background: #f6f7f9;
       }
+      /* JS 到达前的静态骨架：跨境链路下脚本要几秒，白屏比骨架更难受。
+         只放最小样式，等页面样式表到达后由同名的 class 接管细节。 */
+      .boot-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 18px 28px;
+        border-bottom: 1px solid #e6e8ec;
+        background: #fff;
+      }
+      .boot-bar h1,
+      .boot-bar p {
+        margin: 0;
+        font-family: system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      }
+      .boot-bar h1 {
+        font-size: 15px;
+        font-weight: 600;
+        color: #101828;
+      }
+      .boot-bar p {
+        margin-top: 3px;
+        font-size: 12px;
+        color: #6b7280;
+      }
+      .boot-body {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        padding: 24px 28px;
+      }
+      .boot-block {
+        background: #fff;
+        border: 1px solid #e6e8ec;
+        border-radius: 10px;
+      }
     </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="shell">
+        <header class="topbar boot-bar">
+          <div class="brand">
+            <h1>Qoder Proxy 用量</h1>
+            <p>正在载入…</p>
+          </div>
+        </header>
+        <main class="stack boot-body" aria-busy="true">
+          <div class="skeleton boot-block" style="height: 96px"></div>
+          <div class="skeleton boot-block" style="height: 300px"></div>
+          <div class="skeleton boot-block" style="height: 340px"></div>
+        </main>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

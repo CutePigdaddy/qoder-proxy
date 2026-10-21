@@ -307,10 +307,18 @@ button {
 }
 
 .chart-wrap {
+  position: relative;
   margin: 2px -6px 0;
 }
 
-/* 自定义 tooltip：跟随主题，不用 recharts 默认白框 */
+/* 图表悬停提示：绝对定位跟随指针，不吃鼠标事件 */
+.tip-float {
+  position: absolute;
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* 自定义 tooltip：跟随主题，不用图表库默认白框 */
 .tip {
   background: #101828;
   color: #fff;

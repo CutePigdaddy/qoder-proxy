@@ -19,7 +19,8 @@ const MIME = {
 };
 
 const APPLICATIONS = ['Claude Code', 'Codex', 'Cursor'];
-const MODELS = ['Kimi-K3', 'Auto', 'DeepSeek-V3'];
+// 与 /v1/models 的真实目录一致，避免预览里又冒出网关根本不提供的模型
+const MODELS = ['Auto', 'Qwen3.8-Max', 'Qwen3.8-Flash', 'Qwen3.7-Max', 'Qwen3.7-Plus'];
 const pick = (list, i) => list[i % list.length];
 
 function dashboard(hours) {

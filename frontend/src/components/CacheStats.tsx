@@ -1,6 +1,6 @@
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import type { CacheSummary, ModelStats } from '../types';
 import { compact, hitTone, percent } from '../utils/format';
+import TrendChart from './TrendChart';
 
 interface Props {
   cache: CacheSummary;
@@ -17,7 +17,7 @@ const SMALL_SAMPLE = 10;
  * 下方分模型回答「哪里还差」。刷新入口就放在本模块头部，避免跨区域操作。
  */
 const CacheStats: React.FC<Props> = ({ cache, byModel, onRefresh, refreshing }) => {
-  const trendRows = cache.trend.map((p) => ({ label: p.label ?? '', rate: p.value }));
+  const trendRows = cache.trend.map((p) => ({ label: p.label ?? '', value: p.value }));
   const billable = cache.cacheHitTokens + cache.inputTokens;
   const tone = hitTone(cache.hitRate);
   const samples = byModel.reduce((n, m) => n + m.requests, 0);
@@ -73,52 +73,15 @@ const CacheStats: React.FC<Props> = ({ cache, byModel, onRefresh, refreshing }) 
           {trendRows.length < 2 ? (
             <div className="chart-placeholder">数据点不足，再跑几次请求后显示趋势</div>
           ) : (
-            <ResponsiveContainer width="100%" height={180}>
-            <LineChart data={trendRows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-              <CartesianGrid stroke="#eef0f4" vertical={false} />
-              <XAxis
-                dataKey="label"
-                tick={{ fill: '#9ca3af', fontSize: 11 }}
-                tickLine={false}
-                axisLine={{ stroke: '#e6e8ec' }}
-                minTickGap={28}
-              />
-              <YAxis
-                domain={[0, 100]}
-                ticks={[0, 25, 50, 75, 100]}
-                tick={{ fill: '#9ca3af', fontSize: 11 }}
-                tickLine={false}
-                axisLine={false}
-                width={36}
-                tickFormatter={(v: number) => `${v}%`}
-              />
-              <Tooltip
-                cursor={{ stroke: '#c7cad1', strokeWidth: 1 }}
-                content={({ active, payload, label }) => {
-                  if (!active || !payload?.length) return null;
-                  const row = payload[0]?.payload as { rate: number } | undefined;
-                  return (
-                    <div className="tip">
-                      <div className="tip-title">{label}</div>
-                      <div className="tip-row">
-                        <span>命中率</span>
-                        <strong>{row ? percent(row.rate) : '—'}</strong>
-                      </div>
-                    </div>
-                  );
-                }}
-              />
-              <Line
-                type="monotone"
-                dataKey="rate"
-                stroke="#059669"
-                strokeWidth={2}
-                dot={false}
-                activeDot={{ r: 4, strokeWidth: 2, stroke: '#fff' }}
-                isAnimationActive={false}
-              />
-            </LineChart>
-          </ResponsiveContainer>
+            <TrendChart
+              data={trendRows}
+              height={180}
+              color="#059669"
+              max={100}
+              ticks={[0, 25, 50, 75, 100]}
+              format={(v) => `${v}%`}
+              tipLabel="命中率"
+            />
           )}
         </div>
       </div>
