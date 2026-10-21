@@ -132,11 +132,19 @@ const CacheStats: React.FC<Props> = ({ cache, byModel, onRefresh, refreshing }) 
             </div>
             <div className="model-meter">
               <span
-                className={`meter-fill tone-${hitTone(model.hitRate)}`}
+                className={`meter-fill tone-${
+                  model.requests < SMALL_SAMPLE ? 'neutral' : hitTone(model.hitRate)
+                }`}
                 style={{ width: `${Math.min(model.hitRate, 100)}%` }}
               />
             </div>
-            <span className={`model-rate tone-${hitTone(model.hitRate)}`}>{percent(model.hitRate)}</span>
+            <span
+              className={`model-rate tone-${
+                model.requests < SMALL_SAMPLE ? 'neutral' : hitTone(model.hitRate)
+              }`}
+            >
+              {percent(model.hitRate)}
+            </span>
           </div>
         ))}
       </div>
