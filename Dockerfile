@@ -1,7 +1,10 @@
 FROM node:22-alpine AS frontend
 WORKDIR /build
 COPY frontend/package*.json ./
-RUN npm ci
+# `npm install` rather than `npm ci`: the lock was generated on Windows and only
+# records the win32 rolldown binding, so a strict ci leaves vite without its
+# linux-musl native binding. install resolves the platform bindings fresh.
+RUN npm install --no-audit --no-fund
 COPY frontend/ ./
 RUN npm run build
 
