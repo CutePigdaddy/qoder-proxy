@@ -124,10 +124,11 @@ function App() {
   }, []);
 
   const loadModels = useCallback(
-    async (force: boolean) => {
+    async (force: boolean, silent = false) => {
       if (!apiKey) return;
-      const setBusy = force ? setModelsRefreshing : setModelsLoading;
-      setBusy(true);
+      // 静默刷新（定时轮询）不碰 loading/refreshing：表格每 30s 闪一次会很难看
+      const setBusy = force ? setModelsRefreshing : silent ? null : setModelsLoading;
+      setBusy?.(true);
       try {
         // force 时绕过网关的目录缓存；hours 决定「近期用量」的窗口
         const next = await fetchModels(apiKey, { refresh: force, hours });
@@ -136,14 +137,32 @@ function App() {
       } catch (err) {
         setModelsError(describeError(err));
       } finally {
-        setBusy(false);
+        setBusy?.(false);
       }
     },
     [apiKey, hours],
   );
 
+  /**
+   * 模型页同样要轮询：可用性、近 24h 用量都随时间变化，
+   * 「进页面加载一次」的语义是快照，用户会以为数据不再更新。
+   * 首次带 loading（空态显示"正在读取"），之后静默替换，不闪表格。
+   */
   useEffect(() => {
-    if (apiKey && view === 'models') void loadModels(false);
+    if (!apiKey || view !== 'models') return;
+    void loadModels(false);
+    const tick = () => {
+      if (!document.hidden) void loadModels(false, true);
+    };
+    const timer = window.setInterval(tick, POLL_MS);
+    const onVisibility = () => {
+      if (!document.hidden) tick();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, [apiKey, view, hours, loadModels]);
 
   const saveLimit = useCallback(

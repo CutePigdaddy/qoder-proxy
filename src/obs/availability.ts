@@ -54,6 +54,12 @@ export interface ProberOptions {
   intervalMs: number;
   /** 统计窗口，默认 5 分钟 */
   windowMs: number;
+  /**
+   * 每日探测次数上限（北京时间自然日重置）。0 或省略 = 不限，**不建议**：
+   * 每次探测都是一次真实上游请求，会计入「每日计费请求次数」，超限后
+   * 连用户的真实请求也会一起 429。
+   */
+  dailyBudget?: number;
   /** 只探这些模型（显示名或 id）；空 = 目录里的全部 */
   models?: string[];
   /** 单次探测的硬超时，默认 15s */
@@ -68,6 +74,12 @@ export interface ProberOptions {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** 北京时间的自然日，与峰谷判断同一时区口径。 */
+function dayKeyOf(ts: number): string {
+  const d = new Date(ts + 8 * 3600_000);
+  return `${d.getUTCFullYear()}-${d.getUTCMonth() + 1}-${d.getUTCDate()}`;
 }
 
 function messageOf(error: unknown): string {
@@ -115,6 +127,9 @@ export class AvailabilityProber {
   private bootTimer: NodeJS.Timeout | null = null;
   private running = false;
   private stopped = false;
+  private usedToday = 0;
+  private budgetDay = '';
+  private budgetWarned = false;
 
   constructor(private readonly opts: ProberOptions) {
     this.timeoutMs = opts.timeoutMs ?? 15_000;
@@ -166,6 +181,8 @@ export class AvailabilityProber {
       const entries = this.targets(await this.opts.resolver.list());
       for (const entry of entries) {
         if (this.stopped) break;
+        // 预算必须在发请求之前扣：这就是防止把用户当日请求次数用光的闸门
+        if (!this.takeBudget()) break;
         const outcome = await this.probeOne(entry);
         counts[outcome] += 1;
         if (this.staggerMs > 0) await sleep(this.staggerMs);
@@ -232,6 +249,48 @@ export class AvailabilityProber {
   recent(): ProbeSample[] {
     const cutoff = this.now() - this.opts.windowMs;
     return this.samples.filter((sample) => sample.ts >= cutoff);
+  }
+
+  /** 当日预算使用情况；未设预算返回 null。面板用它提示「探测已停」。 */
+  budget(): { used: number; limit: number } | null {
+    const limit = this.opts.dailyBudget ?? 0;
+    if (limit <= 0) return null;
+    const today = dayKeyOf(this.now());
+    return { used: this.budgetDay === today ? this.usedToday : 0, limit };
+  }
+
+  /**
+   * 消费一次探测配额。
+   *
+   * 2026-10-22 的真实事故：`FREE_INPUT` 不扣 credits，但计入上游的
+   * 「每日计费请求次数」（code 110 `Billing daily count exceeded`）。14 个模型
+   * 每 30s 一轮 = 28 次/分钟，十几分钟就把当天额度打爆，之后**用户自己的请求
+   * 也全部 429**，而且当天无法恢复。
+   *
+   * 所以这里的预算是硬闸门，不是节流建议：用完即停，等日界重置。
+   */
+  private takeBudget(): boolean {
+    const limit = this.opts.dailyBudget ?? 0;
+    if (limit <= 0) return true;
+
+    const today = dayKeyOf(this.now());
+    if (this.budgetDay !== today) {
+      this.budgetDay = today;
+      this.usedToday = 0;
+      this.budgetWarned = false;
+    }
+    if (this.usedToday >= limit) {
+      if (!this.budgetWarned) {
+        this.budgetWarned = true;
+        this.opts.logger.warn(
+          { limit, day: today },
+          'daily probe budget exhausted; probing paused until the day rolls over',
+        );
+      }
+      return false;
+    }
+    this.usedToday += 1;
+    return true;
   }
 
   private targets(entries: ModelListEntry[]): ModelListEntry[] {

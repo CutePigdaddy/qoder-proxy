@@ -99,13 +99,19 @@ async function main(): Promise<void> {
         logger,
         intervalMs: config.probe.intervalMs,
         windowMs: config.probe.windowMs,
+        dailyBudget: config.probe.dailyBudget,
         models: config.probe.models,
       })
     : null;
   if (probe) {
     logger.info(
-      { intervalMs: config.probe.intervalMs, windowMs: config.probe.windowMs, models: config.probe.models },
-      'availability probing enabled (free channel, no credits)',
+      {
+        intervalMs: config.probe.intervalMs,
+        windowMs: config.probe.windowMs,
+        dailyBudget: config.probe.dailyBudget,
+        models: config.probe.models,
+      },
+      'availability probing enabled (counts against the daily request quota)',
     );
   }
 

@@ -40,13 +40,20 @@ const EnvSchema = z.object({
   // conversation and runs ~144 SHA-256 passes per usage event. Forensics only,
   // so it stays off unless someone is actively chasing a cache regression.
   CACHE_DIAGNOSTICS: z.enum(['0', '1']).default('0'),
-  // 模型可用性探测：用免费通道（FREE_INPUT，不扣 credits）发最小请求，实测
-  // 「现在能不能用」。失败天然不扣费，成功也不计入 credits，所以这是唯一能
-  // 持续采样而不烧额度的办法。下限 5s 是保护：再短就变成自己在压上游。
-  PROBE_ENABLED: z.enum(['0', '1']).default('1'),
-  PROBE_INTERVAL_MS: z.coerce.number().int().min(5_000).default(30_000),
+  // 模型可用性探测。
+  //
+  // 重要教训（2026-10-22）：`FREE_INPUT` 不扣 credits，**但计入每日计费请求次数**
+  // （上游 code 110 "Billing daily count exceeded"）。每 30s 探 14 个模型 =
+  // 28 次/分钟，十几分钟就能把当天的次数配额打爆，随后所有真实请求一起 429。
+  // 所以这里默认【关闭】，并且强制带日预算保护。
+  PROBE_ENABLED: z.enum(['0', '1']).default('0'),
+  // 默认 5 分钟一轮：即便开启，也要让每日次数消耗保持在个位数每小时的量级。
+  PROBE_INTERVAL_MS: z.coerce.number().int().min(5_000).default(300_000),
   PROBE_WINDOW_MS: z.coerce.number().int().min(60_000).default(300_000),
-  // 逗号分隔的模型白名单（显示名或 id）；留空 = 目录里的全部模型
+  // 每日探测次数硬上限（北京时间自然日重置）。0 = 不限制（不建议）。
+  PROBE_DAILY_BUDGET: z.coerce.number().int().min(0).default(200),
+  // 逗号分隔的模型白名单（显示名或 id）；留空 = 目录里的全部模型。
+  // 全目录 × 30s 是最危险的组合，开启前请先算一下次数。
   PROBE_MODELS: z.string().default(''),
 });
 
@@ -91,6 +98,8 @@ export interface AppConfig {
     enabled: boolean;
     intervalMs: number;
     windowMs: number;
+    /** 每日探测次数上限；0 = 不限 */
+    dailyBudget: number;
     models: string[];
   };
   models: ModelsConfig;
@@ -127,6 +136,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       enabled: e.PROBE_ENABLED === '1',
       intervalMs: e.PROBE_INTERVAL_MS,
       windowMs: e.PROBE_WINDOW_MS,
+      dailyBudget: e.PROBE_DAILY_BUDGET,
       models: e.PROBE_MODELS.split(',')
         .map((name) => name.trim())
         .filter((name) => name.length > 0),

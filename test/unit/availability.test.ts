@@ -141,6 +141,17 @@ describe('AvailabilityProber', () => {
     expect(prober.summary('Model-B')?.samples).toBe(1);
   });
 
+  it('stops probing once the daily budget is spent', async () => {
+    // 预算 1、两个模型：第二个必须连请求都不发。
+    // 这是唯一能防止「探测把用户当日请求次数用光」的闸门。
+    const prober = makeProber(answers, { dailyBudget: 1 }, [entry('Model-A'), entry('Model-B')]);
+    await prober.probeAll();
+
+    expect(prober.summary('Model-A')?.samples).toBe(1);
+    expect(prober.summary('Model-B')).toBeNull();
+    expect(prober.budget()).toEqual({ used: 1, limit: 1 });
+  });
+
   it('reports unknown for a model that was never probed', () => {
     const prober = makeProber(answers);
     expect(prober.summary('Never-Seen')).toBeNull();

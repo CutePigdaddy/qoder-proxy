@@ -67,6 +67,8 @@ export function registerModels(app: Hono, deps: Deps): void {
 
     return c.json({
       object: 'list',
+      // 当日探测预算；null = 探测关闭或未设上限。面板据此提示「探测已停」
+      probe_budget: deps.probe?.budget() ?? null,
       data: entries.map((entry) => {
         const rate = rateFor(deps.pricing, entry.displayName);
         return {
