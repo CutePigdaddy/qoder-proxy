@@ -26,6 +26,18 @@ export interface UsageRecord {
   durationMs: number;
   status: number;
   /**
+   * 上游为本次调用记的 credits（计费口径，非 token）。
+   *
+   * 三个字段都是**可选**，只有上游 usage 帧里真的带了才写：`FREE_INPUT` 通道
+   * 通常给 0，而「没这个字段」与「写了 0」必须能区分——否则「这条链路到底
+   * 扣不扣额度」永远只能靠 `/v2/quota/usage` 的差值去猜。
+   */
+  credits?: number;
+  /** 促销前的 credits；有值时说明上游按折扣价计费 */
+  originalCredits?: number;
+  /** 上游自己判定本次是否计费 */
+  billable?: boolean;
+  /**
    * 原始 User-Agent（截断），只落在日志文件里、不经 API 暴露。
    * 用途：`application` 归类不准时能反查是哪个客户端，不必再猜。
    */

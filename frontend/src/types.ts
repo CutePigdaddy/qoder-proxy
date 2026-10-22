@@ -10,6 +10,13 @@ export interface UsageRow {
   status: number;
   /** 上游通道（free / metered / fallback）；旧记录没有该字段 */
   channel?: string;
+  /**
+   * 上游为本次调用记的 credits。`null`/缺失 = 上游没给这个字段（老记录或失败
+   * 请求），与 `0`（明确没扣费）是两件事，表格里分别显示「—」与「0」。
+   */
+  credits?: number | null;
+  /** 上游判定是否计费；null/缺失 = 上游没给 */
+  billable?: boolean | null;
   /** 按公开价目折算的成本（元）；null = 该模型没有价目 */
   cost?: number | null;
 }
@@ -85,6 +92,10 @@ export interface DashboardData {
     totalTokens: number;
     avgDuration: number;
     errorRate: number;
+    /** 上游记账的 credits 合计（不是人民币成本估算） */
+    credits?: number;
+    /** 被上游标成 billable:true 的请求数 */
+    billableRequests?: number;
   };
   cache: CacheSummary;
   cost: CostSummary;

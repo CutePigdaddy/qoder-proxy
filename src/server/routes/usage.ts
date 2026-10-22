@@ -26,6 +26,13 @@ export interface UsageRow {
   status: number;
   /** 走的上游通道；历史记录没有该字段，一律回填 free */
   channel: string;
+  /**
+   * 上游为本次调用记的 credits。`null` = 上游没给这个字段（老记录或失败请求），
+   * 与 `0`（明确没扣费）不同——面板上一个显示「—」，一个显示「0」。
+   */
+  credits: number | null;
+  /** 上游判定是否计费；null = 上游没给 */
+  billable: boolean | null;
   /** 按公开价目折算的本条成本（元）；null = 该模型没有价目，未计入 */
   cost: number | null;
 }
@@ -98,6 +105,14 @@ export interface DashboardData {
     totalTokens: number;
     avgDuration: number;
     errorRate: number;
+    /**
+     * 窗口内上游记账的 credits 合计。与 `cost` 完全不同口径：`cost` 是我们按
+     * 公开价目折算的人民币，`credits` 是上游自己写进 usage 的数字。
+     * 免费通道跑几百次这里也应该是 0——不是估算，是上游的原话。
+     */
+    credits: number;
+    /** 被上游明确标成 `billable:true` 的请求数 */
+    billableRequests: number;
   };
   cache: CacheSummary;
   cost: CostSummary;
@@ -189,6 +204,8 @@ export function aggregate(
       acc.cached += e.cachedTokens;
       acc.output += e.outputTokens;
       acc.duration += e.durationMs;
+      acc.credits += e.credits ?? 0;
+      if (e.billable === true) acc.billableRequests += 1;
       if (e.status >= 400) acc.errors += 1;
       const rate = rateFor(card, e.model);
       if (rate) {
@@ -207,6 +224,8 @@ export function aggregate(
       output: 0,
       duration: 0,
       errors: 0,
+      credits: 0,
+      billableRequests: 0,
       cost: 0,
       baseline: 0,
       unpricedRequests: 0,
@@ -301,6 +320,10 @@ export function aggregate(
       totalTokens: billable + totals.output,
       avgDuration: events.length ? Number((totals.duration / events.length / 1000).toFixed(2)) : 0,
       errorRate: events.length ? Number(((totals.errors / events.length) * 100).toFixed(1)) : 0,
+      // 上游记账口径：`FREE_INPUT` 通道跑了几百次也应该是 0。这条不是成本估算，
+      // 是上游自己给的数字，用来核对「免费通道到底扣不扣额度」。
+      credits: Number(totals.credits.toFixed(4)),
+      billableRequests: totals.billableRequests,
     },
     channels: [...channelRows.values()].map((row) => ({
       ...row,
@@ -364,6 +387,8 @@ export function toUsageRows(
         outputTokens: e.outputTokens,
         cacheHitTokens: e.cachedTokens,
         status: e.status,
+        credits: e.credits ?? null,
+        billable: e.billable ?? null,
         cost: price ? roundMoney(priceUsage(card, price, e).cost) : null,
       };
     });

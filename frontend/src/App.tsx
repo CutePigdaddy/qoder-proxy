@@ -410,7 +410,11 @@ function App() {
                 onRefresh={refresh}
                 refreshing={refreshing}
               />
-              <CostPanel cost={data.cost} />
+              <CostPanel
+                cost={data.cost}
+                credits={data.summary.credits}
+                billableRequests={data.summary.billableRequests}
+              />
               <RequestLogTable rows={data.recentLogs} />
             </main>
           ) : (

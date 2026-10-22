@@ -63,6 +63,15 @@ interface QoderInner {
     total_tokens?: number;
     input_tokens?: number;
     output_tokens?: number;
+    /**
+     * 计费口径。上游给的是**复数** `credits`（单数 `credit` 只是兜底），
+     * 只读单数会把每一行都记成 0——这是 qoder2api-hub 踩过的坑（issue #22），
+     * 历史数据还无法回填。
+     */
+    credits?: number;
+    credit?: number;
+    original_credits?: number;
+    billable?: boolean;
     prompt_tokens_details?: {
       cached_tokens?: number;
       cacheable_tokens?: number;
@@ -79,9 +88,41 @@ function stableId(prefix: string, ...parts: string[]): string {
   return hash.digest('hex').slice(0, 32);
 }
 
+/**
+ * Pull the billing figures out of an upstream usage block, preserving the
+ * difference between "the upstream said 0" and "the upstream said nothing".
+ *
+ * That distinction is the whole point: on the `FREE_INPUT` channel the field is
+ * typically *present and zero*, and reporting it as `undefined` would leave the
+ * "does this cost credits?" question permanently unanswerable from our own logs.
+ */
+function readCredits(
+  usage: NonNullable<QoderInner['usage']>,
+): { credits?: number; originalCredits?: number; billable?: boolean } | null {
+  const out: { credits?: number; originalCredits?: number; billable?: boolean } = {};
+  // Prefer the plural spelling; the singular one is a legacy alias upstream may
+  // still emit on some realms.
+  const credits = usage.credits ?? usage.credit;
+  if (typeof credits === 'number' && Number.isFinite(credits)) out.credits = credits;
+  if (typeof usage.original_credits === 'number' && Number.isFinite(usage.original_credits)) {
+    out.originalCredits = usage.original_credits;
+  }
+  if (typeof usage.billable === 'boolean') out.billable = usage.billable;
+  return Object.keys(out).length > 0 ? out : null;
+}
+
 /** Back-off attempts for transient upstream refusal (429 rate limit / 503 busy). */
 const MAX_BUSY_RETRIES = 2;
 const DEFAULT_RETRY_MAX_WAIT_MS = 30_000;
+/**
+ * 10605（模型无容量）默认等待预算：整次请求累计 15s、最多 2 轮。
+ *
+ * 选取依据：上游给的 `retryAfterSeconds` 通常是 2，两轮加起来 4s 上下，仍在
+ * 「客户端只会觉得慢」的量级；15s 是护栏，防止某次上游回一个很大的 hint 把
+ * 请求钉死。把预算设成 0 就恢复早先「0.17s 立即失败」的行为。
+ */
+const DEFAULT_QUEUE_WAIT_BUDGET_MS = 15_000;
+const DEFAULT_QUEUE_MAX_RETRIES = 2;
 
 /**
  * Transient upstream refusal: worth another attempt. Two terminal signals must
@@ -187,6 +228,8 @@ function cacheDiagnostics(
 export class QoderClient {
   private readonly retryMaxWaitMs: number;
   private readonly maxBusyRetries: number;
+  private readonly queueWaitBudgetMs: number;
+  private readonly maxQueueRetries: number;
 
   constructor(
     private readonly opts: {
@@ -210,10 +253,16 @@ export class QoderClient {
        * **默认保持 5（不伪装），要不要改由配置决定**。
        */
       clientType?: string;
+      /** 10605 排队：整次请求累计可等待多久（毫秒）。0 = 不等，立即失败。 */
+      queueWaitBudgetMs?: number;
+      /** 10605 排队：最多重试几轮。探测器传 0，它要的是「此刻」的答案。 */
+      maxQueueRetries?: number;
     },
   ) {
     this.retryMaxWaitMs = opts.retryMaxWaitMs ?? DEFAULT_RETRY_MAX_WAIT_MS;
     this.maxBusyRetries = opts.maxBusyRetries ?? MAX_BUSY_RETRIES;
+    this.queueWaitBudgetMs = opts.queueWaitBudgetMs ?? DEFAULT_QUEUE_WAIT_BUDGET_MS;
+    this.maxQueueRetries = opts.maxQueueRetries ?? DEFAULT_QUEUE_MAX_RETRIES;
   }
 
   /**
@@ -228,10 +277,17 @@ export class QoderClient {
    * Quota exhaustion also arrives as 429 but is terminal, so it is never
    * retried; and the back-off wait aborts with the caller, so a disconnected
    * client never keeps a concurrency slot pinned for the full wait.
+   *
+   * 10605（模型无容量）自成一档：它不是限流也不是配额耗尽，而是「这个模型
+   * 此刻没给容量」。上游自己会给 `retryAfterSeconds`，官方客户端据此轮询到
+   * 拿到容量为止（默认肯等 60 分钟）。我们只等一小段（`queueWaitBudgetMs`，
+   * 默认 15s / 2 轮），够覆盖几秒钟的容量抖动，又不会让客户端以为挂死。
    */
   async *chat(req: IRRequest, model: ResolvedModel, signal: AbortSignal): AsyncGenerator<IREvent> {
     let credentialRetries = 0;
     let busyRetries = 0;
+    let queueRetries = 0;
+    let queueWaitedMs = 0;
     for (;;) {
       let yielded = false;
       try {
@@ -254,6 +310,32 @@ export class QoderClient {
           );
           await this.opts.credentials.forceRefresh();
           continue;
+        }
+
+        // 10605：等上游给的 retryAfterSeconds 再来。预算按累计算，并且每次
+        // 都留一点抖动——同一个账号的多个请求同时醒来会把刚空出的槽位再挤爆。
+        if (error instanceof ResourceLimitError && queueRetries < this.maxQueueRetries) {
+          const hintMs = (error.detail.upstreamRetryAfter ?? 2) * 1000;
+          const jitterMs = Math.floor(Math.random() * 500);
+          const remaining = this.queueWaitBudgetMs - queueWaitedMs;
+          const waitMs = Math.min(hintMs + jitterMs, remaining, this.retryMaxWaitMs);
+          if (waitMs > 0) {
+            queueRetries += 1;
+            queueWaitedMs += waitMs;
+            logger.warn(
+              {
+                model: model.key,
+                queue: error.detail.tier,
+                waitMs,
+                queueRetries,
+                waitedMs: queueWaitedMs,
+                budgetMs: this.queueWaitBudgetMs,
+              },
+              'upstream has no capacity for this model; waiting for the queue and retrying',
+            );
+            if (!(await waitForRetry(waitMs, signal))) throw error;
+            continue;
+          }
         }
 
         if (isTransientBusy(error) && busyRetries < this.maxBusyRetries) {
@@ -441,6 +523,10 @@ export class QoderClient {
           totalTokens: inner.usage.total_tokens ?? prompt + completion,
           cachedTokens: details?.cached_tokens,
           cacheableTokens: details?.cacheable_tokens,
+          // 只在上游真的给了这个字段时才带出去：`undefined`（没这个字段）与
+          // `0`（明确记为 0）必须能区分，否则「免费通道没扣费」这件事就退化成
+          // 一个无法证伪的猜测。
+          ...(readCredits(inner.usage) ?? {}),
         };
       }
 

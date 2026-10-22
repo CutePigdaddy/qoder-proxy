@@ -13,6 +13,17 @@ const EnvSchema = z.object({
   // Upper bound for a single retry back-off wait. Capped low on purpose: nothing
   // is streamed during the wait, so a long one reads as a hang to the client.
   RETRY_MAX_WAIT_MS: z.coerce.number().int().positive().default(30_000),
+  // 10605 排队的等待预算（整次请求累计）与轮数。
+  //
+  // 10605 的语义是「这个模型此刻没给容量」，不是「这个账号没资格」：
+  // `queueType`（p1/p3）只是被分到哪条队列，企业版 p1 一样会撞到它，官方客户端
+  // 为此专门有一套轮询协议、默认肯等 60 分钟。我们等不了那么久，但也不该像
+  // 早先那样 0.17s 就判死——那会把几秒后就能拿到容量的请求一起丢掉。
+  //
+  // 预算按**整次请求累计**计：等待期间没有任何字节流出，客户端看起来就是卡住，
+  // 所以这个值必须小。设 0 即恢复「立即失败」的旧行为。
+  QUEUE_WAIT_BUDGET_MS: z.coerce.number().int().min(0).default(15_000),
+  QUEUE_MAX_RETRIES: z.coerce.number().int().min(0).default(2),
   BODY_LIMIT: z.coerce.number().int().positive().default(10 * 1024 * 1024),
   MODEL_FALLBACK: z.string().default('auto'),
   TOKEN_CACHE_PATH: z.string().default('.cache/tokens.json'),
@@ -95,6 +106,10 @@ export interface AppConfig {
   queueLimit: number;
   requestTimeoutMs: number;
   retryMaxWaitMs: number;
+  /** 10605 排队：整次请求累计可等待多久（毫秒），0 = 立即失败 */
+  queueWaitBudgetMs: number;
+  /** 10605 排队：最多重试几轮 */
+  maxQueueRetries: number;
   bodyLimit: number;
   tokenCachePath: string;
   usageLogPath: string;
@@ -140,6 +155,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     queueLimit: e.QUEUE_LIMIT,
     requestTimeoutMs: e.REQUEST_TIMEOUT_MS,
     retryMaxWaitMs: e.RETRY_MAX_WAIT_MS,
+    queueWaitBudgetMs: e.QUEUE_WAIT_BUDGET_MS,
+    maxQueueRetries: e.QUEUE_MAX_RETRIES,
     bodyLimit: e.BODY_LIMIT,
     tokenCachePath: e.TOKEN_CACHE_PATH,
     usageLogPath: e.USAGE_LOG_PATH,

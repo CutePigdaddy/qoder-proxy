@@ -4,6 +4,12 @@ import TrendChart from './TrendChart';
 
 interface Props {
   cost: CostSummary;
+  /**
+   * 上游自己记的 credits（与 `cost` 是两个口径：这里是对账，那里是估算）。
+   * 免费通道跑几百次也该是 0；显示它才能直接回答「到底扣没扣额度」。
+   */
+  credits?: number;
+  billableRequests?: number;
 }
 
 /** 样本少时成本波动极大，标出来免得把一次缓存写入读成「成本异常」。 */
@@ -21,7 +27,7 @@ type Tone = 'good' | 'fair' | 'poor' | 'neutral';
  * 为什么缓存抵扣只用三档色而不是精确百分比：抵扣比例天然接近「命中率 × 折后价差」，
  * 而命中率面板已经在讲同一件事，这里只需要一个「省得多不多」的总体印象。
  */
-const CostPanel: React.FC<Props> = ({ cost }) => {
+const CostPanel: React.FC<Props> = ({ cost, credits, billableRequests }) => {
   const trendRows = cost.trend.map((p) => ({ label: p.label ?? '', value: p.value }));
   const samples = cost.byModel.reduce((n, row) => n + row.requests, 0);
 
@@ -72,6 +78,17 @@ const CostPanel: React.FC<Props> = ({ cost }) => {
             </div>
           </dl>
           {thin && <p className="cache-note">样本较少（{samples} 次请求），成本仅供参考</p>}
+          {/* 上游口径的对账行：上面的 ¥ 是我们按价目表折算的，这里是上游自己
+              记账的数字。免费通道下它应该是 0——那才叫「真的没花额度」。 */}
+          {credits !== undefined && (
+            <p className="cache-note">
+              上游 usage 记账 <span className="mono">{Number(credits.toFixed(4))}</span> credits
+              {billableRequests !== undefined && billableRequests > 0
+                ? `（其中 ${billableRequests} 次被标为计费）`
+                : '（没有请求被标为计费）'}
+              ，这是上游口径、与上方价目折算无关。
+            </p>
+          )}
           {/* 未定价的请求不进总额，必须说明，否则总额会被误读成「全部花费」 */}
           {unpriced.requests > 0 && (
             <p className="cache-note">

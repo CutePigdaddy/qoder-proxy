@@ -59,11 +59,14 @@ describe('mapUpstreamFailure', () => {
     const mapped = mapUpstreamFailure({ status: 403, body });
     expect(mapped).toBeInstanceOf(ResourceLimitError);
     expect(mapped.status).toBe(503);
-    // The upstream says 2s; that hint only makes sense for a full queue.
+    // 对外仍给长 Retry-After（客户端别在空队列上猛打），但上游的 2s 要留在
+    // detail 里 —— 网关内部按它决定等一轮还是立刻放弃。
     expect(mapped.retryAfter).toBe(60);
+    expect((mapped as ResourceLimitError).detail.upstreamRetryAfter).toBe(2);
     expect(mapped).not.toBeInstanceOf(CredentialRejectedError);
     expect(mapped.message).toContain('10605');
-    expect(mapped.message).toContain('tier p3');
+    // `queueType` 是「被分到哪条队列」，不是「账号档位」：企业版 p1 一样会撞到。
+    expect(mapped.message).toContain('queue p3');
     expect(mapped.message).toContain('RESOURCE_LIMIT');
     expect((mapped as ResourceLimitError).detail.tier).toBe('p3');
   });

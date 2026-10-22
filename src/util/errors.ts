@@ -47,24 +47,30 @@ export class QuotaExhaustedError extends HttpError {
 }
 
 /**
- * The account tier has no capacity for this request right now.
+ * The model has no capacity for this request right now (10605 + RESOURCE_LIMIT).
  *
- * The upstream reports it with business code 10605, the same code it uses for
- * genuine congestion — but the payload says the opposite of "busy":
- * `queueCount: 0`, `isQueued: false`, `serviceAvailable: true`,
- * `subCode: "RESOURCE_LIMIT"`. Nothing is queued and nothing is broken: this
- * tier simply owns no share of the resources at this hour.
+ * 语义订正（2026-10-22，对照 qoder2api-hub 的长期实测与官方客户端行为）：
+ * 这条错误**不是**「账号档位没有份额」。`queueType`（p1 / p3）表示请求被分到
+ * 哪条队列，不代表准入资格——企业版 p1 账号同样会撞到 10605。`queueCount: 0`
+ * 只说明此刻队列里没有积压的排号，`serviceAvailable: true` 只说明服务在运行，
+ * 两者都不意味着「你能立刻拿到槽位」。上游的真实意思是「这个模型现在没有
+ * 给你容量，过几秒再来」，官方客户端为此专门有一套 `/ask/queue/status`
+ * 轮询协议，默认肯等 60 分钟。
  *
- * A distinct type matters because retrying is pointless. Every attempt costs
- * the upstream's `retryAfterSeconds` (2s) and ends in the same refusal, which
- * is how one request used to burn 4–5s before surfacing an error. The
- * `Retry-After` we emit is deliberately far longer than the upstream hint, so
- * the client backs off instead of hammering a lane that has no capacity.
+ * 所以这个类型的作用是**分离语义**（区别于真拥堵的 busy），不是「判死」：
+ * 调用方可以按 `detail.upstreamRetryAfter`（上游给的 retryAfterSeconds）等一轮
+ * 再试。对外仍发一个较长的 `Retry-After`，避免客户端在同一个空队列上猛打。
  */
 export class ResourceLimitError extends HttpError {
   constructor(
     message: string,
-    readonly detail: { tier?: string; queueCount?: number; subCode?: string },
+    readonly detail: {
+      tier?: string;
+      queueCount?: number;
+      subCode?: string;
+      /** 上游错误体里的 `retryAfterSeconds`，单位秒；缺省时按 2s 处理 */
+      upstreamRetryAfter?: number;
+    },
     retryAfter = 60,
   ) {
     super(503, message, retryAfter);
@@ -103,7 +109,7 @@ export type ErrorType =
   | 'quota' // QuotaExhaustedError：配额耗尽，终态
   | 'credential' // 凭据被上游拒绝（401/105）
   | 'busy' // 容量已满（网关排队或上游 503）
-  | 'resource-limit' // 账号档位当前无资源份额（10605 + RESOURCE_LIMIT，重试无意义）
+  | 'resource-limit' // 模型当前无容量（10605 + RESOURCE_LIMIT，可等 retryAfterSeconds 重试）
   | 'rate-limit' // 上游限流（瞬态）
   | 'timeout' // 我方 deadline 到期（排队或上游阶段）
   | 'client-gone' // 客户端断开（499）
@@ -227,19 +233,22 @@ export function mapUpstreamFailure({ status, body }: UpstreamFailure): HttpError
       return new QuotaExhaustedError(`Upstream quota exhausted (code ${code})`, retryAfter);
     }
     if (BUSY_ERROR_CODES.has(code)) {
-      // An empty queue plus an explicit resource-limit marker is not congestion:
-      // a retry two seconds later is refused in exactly the same way, so the
-      // only thing the wait buys is latency. Treat it as a terminal tier
-      // refusal and tell the client to back off for much longer.
-      const emptyQueue = queueCount === 0 && isQueued === false;
-      if (subCode === 'RESOURCE_LIMIT' || (emptyQueue && queueType !== undefined)) {
+      // 同一业务码承载两种情形，必须分开：
+      //   1. 真拥堵 —— 队列里确实排着人（`isQueued` / `queueCount > 0`），
+      //      上游给的 retryAfterSeconds 是有意义的，按它退避重试；
+      //   2. 模型此刻没容量 —— 队列是空的、服务在跑，但也没给槽位
+      //      （`RESOURCE_LIMIT`）。这**不是**「账号没资格」：企业版 p1 同样会
+      //      撞到，`queueType` 只是被分到哪条队列。早期实现把它读成终态，
+      //      于是 0.17s 就判死；现在归到 ResourceLimitError，允许等一小段。
+      const genuinelyCongested = isQueued === true || (queueCount ?? 0) > 0;
+      if (!genuinelyCongested && (subCode === 'RESOURCE_LIMIT' || queueType !== undefined)) {
         const parts = [`code ${code}`];
-        if (queueType) parts.push(`tier ${queueType}`);
+        if (queueType) parts.push(`queue ${queueType}`);
         if (subCode) parts.push(subCode);
-        if (queueCount !== undefined) parts.push(`queue ${queueCount}`);
+        if (queueCount !== undefined) parts.push(`pending ${queueCount}`);
         return new ResourceLimitError(
-          `Upstream resource limit: this account tier has no capacity right now (${parts.join(', ')})`,
-          { tier: queueType, queueCount, subCode },
+          `Upstream model queue: no capacity for this model right now (${parts.join(', ')})`,
+          { tier: queueType, queueCount, subCode, upstreamRetryAfter: retryAfter },
         );
       }
       return new HttpError(503, `Upstream is busy (code ${code})`, retryAfter ?? 30);

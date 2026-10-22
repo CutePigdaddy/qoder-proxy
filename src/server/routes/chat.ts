@@ -42,8 +42,21 @@ export function registerChat(app: Hono, deps: Deps): void {
     let release: Release | null = null;
     let cleanup: (() => void) | null = null;
     let modelKey = 'unknown';
-    /** Last usage frame seen for this request; null when the upstream never sent one. */
-    let tokens: { prompt: number; completion: number; cached: number } | null = null;
+    /**
+     * 最近一帧 usage；上游一帧都没给时为 null。
+     *
+     * `credits` 三件套是**计费口径**（不是 token）：`FREE_INPUT` 通道理论上
+     * 不写 credits，但「没这个字段」和「明确写了 0」在数据上是两回事，只有把
+     * 它们原样落盘，才不用再靠 `/v2/quota/usage` 的差值去猜扣没扣费。
+     */
+    let tokens: {
+      prompt: number;
+      completion: number;
+      cached: number;
+      credits?: number;
+      originalCredits?: number;
+      billable?: boolean;
+    } | null = null;
 
     /**
      * 一条请求的完整记录：用量行 + 一次可用性样本。
@@ -71,6 +84,11 @@ export function registerChat(app: Hono, deps: Deps): void {
         outputTokens: tokens?.completion ?? 0,
         durationMs,
         status: Number(status) || 0,
+        // 只有上游真的给了才写这三个键：失败请求/无 usage 帧的行保持旧格式，
+        // 老记录也不会被反填成 0。
+        ...(tokens?.credits !== undefined ? { credits: tokens.credits } : {}),
+        ...(tokens?.originalCredits !== undefined ? { originalCredits: tokens.originalCredits } : {}),
+        ...(tokens?.billable !== undefined ? { billable: tokens.billable } : {}),
         ...(ua ? { ua: ua.slice(0, 160) } : {}),
       });
       // `modelKey` 保持 'unknown' 说明请求在解析出模型之前就失败了，
@@ -236,6 +254,9 @@ export function registerChat(app: Hono, deps: Deps): void {
                     prompt: event.promptTokens,
                     completion: event.completionTokens,
                     cached: event.cachedTokens ?? 0,
+                    ...(event.credits !== undefined ? { credits: event.credits } : {}),
+                    ...(event.originalCredits !== undefined ? { originalCredits: event.originalCredits } : {}),
+                    ...(event.billable !== undefined ? { billable: event.billable } : {}),
                   };
                   break;
                 case 'done':
@@ -281,6 +302,9 @@ export function registerChat(app: Hono, deps: Deps): void {
             prompt: event.promptTokens,
             completion: event.completionTokens,
             cached: event.cachedTokens ?? 0,
+            ...(event.credits !== undefined ? { credits: event.credits } : {}),
+            ...(event.originalCredits !== undefined ? { originalCredits: event.originalCredits } : {}),
+            ...(event.billable !== undefined ? { billable: event.billable } : {}),
           };
         }
         accumulator.apply(event);

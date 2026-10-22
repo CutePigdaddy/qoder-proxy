@@ -8,6 +8,10 @@ interface Props {
 /**
  * 请求明细，列与 cc-switch 对齐：时间 / 应用 / 供应商 / 模型 / 新增输入 / 输出 / 缓存命中。
  * 数字右对齐并使用等宽数字，纵向比较时位数不跳动。
+ *
+ * 末尾的 credits 列是**上游自己的记账口径**（不是按价目表折算的人民币：那是成本
+ * 面板的事）。免费通道跑几百次这里也该是 0 —— 显示「0」表示上游明确记为 0，
+ * 显示「—」表示上游没给这个字段（老记录、失败请求），两者不能混。
  */
 const RequestLogTable: React.FC<Props> = ({ rows }) => {
   return (
@@ -39,12 +43,15 @@ const RequestLogTable: React.FC<Props> = ({ rows }) => {
               <th scope="col" className="num">
                 命中率
               </th>
+              <th scope="col" className="num" title="上游 usage 里的 credits（计费口径）">
+                credits
+              </th>
             </tr>
           </thead>
           <tbody>
             {rows.map((row) => {
-              const billable = row.inputTokens + row.cacheHitTokens;
-              const rate = billable === 0 ? 0 : (row.cacheHitTokens / billable) * 100;
+              const totalInput = row.inputTokens + row.cacheHitTokens;
+              const rate = totalInput === 0 ? 0 : (row.cacheHitTokens / totalInput) * 100;
               // 首次写入缓存的那次调用必然是 0%，标红会让人以为缓存坏了；
               // 只有真正命中过才按分档上色，没命中一律中性。
               const tone = row.cacheHitTokens === 0 ? 'neutral' : hitTone(rate);
@@ -69,10 +76,27 @@ const RequestLogTable: React.FC<Props> = ({ rows }) => {
                   <td className="num mono">{grouped(row.outputTokens)}</td>
                   <td className="num mono">{grouped(row.cacheHitTokens)}</td>
                   <td className="num mono">
-                    {billable === 0 ? (
+                    {totalInput === 0 ? (
                       <span className="muted">—</span>
                     ) : (
                       <span className={`rate tone-${tone}`}>{percent(rate, 0)}</span>
+                    )}
+                  </td>
+                  <td className="num mono">
+                    {row.credits === null || row.credits === undefined ? (
+                      <span className="muted">—</span>
+                    ) : (
+                      <span
+                        title={
+                          row.billable === true
+                            ? '上游把本次标为计费'
+                            : row.billable === false
+                              ? '上游把本次标为不计费'
+                              : undefined
+                        }
+                      >
+                        {Number(row.credits.toFixed(4))}
+                      </span>
                     )}
                   </td>
                 </tr>

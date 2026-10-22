@@ -103,6 +103,10 @@ function dashboard(hours) {
       inputTokens: Math.random() > 0.75 ? 200 + Math.floor(Math.random() * 6000) : Math.floor(Math.random() * 1500),
       outputTokens: 100 + Math.floor(Math.random() * 4000),
       cacheHitTokens: 8000 + Math.floor(Math.random() * 120000),
+      // 免费通道 → 上游明确记 0；偶尔留 null 表示「上游没给这个字段」（失败请求），
+      // 面板上分别渲染成 0 与 —，这正是要看的那点区别。
+      credits: i % 11 === 10 ? null : 0,
+      billable: i % 11 === 10 ? null : false,
     };
   });
 
@@ -118,6 +122,10 @@ function dashboard(hours) {
       totalTokens: billable + outputTokens,
       avgDuration: 2.31,
       errorRate: 0.4,
+      // 免费通道：上游记 0，且没有一次被标成计费。预览也照这个来，
+      // 否则面板上那个 0 会被误当成「还没接上」。
+      credits: 0,
+      billableRequests: 0,
     },
     cache: {
       hitRate: Number(((cacheHitTokens / billable) * 100).toFixed(1)),

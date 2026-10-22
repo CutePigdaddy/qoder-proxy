@@ -64,6 +64,8 @@ async function main(): Promise<void> {
     retryMaxWaitMs: config.retryMaxWaitMs,
     cacheDiagnostics: config.cacheDiagnostics,
     clientType: config.clientType,
+    queueWaitBudgetMs: config.queueWaitBudgetMs,
+    maxQueueRetries: config.maxQueueRetries,
   });
   const quota = new QuotaService({ endpoints, credentials, ttlMs: config.quotaTtlMs });
   const gate = new AdmissionGate(config.concurrency, config.queueLimit);
@@ -95,6 +97,9 @@ async function main(): Promise<void> {
           tokenMarkerMode: config.tokenMarkerMode,
           retryMaxWaitMs: config.retryMaxWaitMs,
           maxBusyRetries: 0,
+          // 探测要的是「此刻能不能用」；等一轮会把失败抹成成功，指标就失真了。
+          maxQueueRetries: 0,
+          queueWaitBudgetMs: 0,
           cacheDiagnostics: false,
           clientType: config.clientType,
         })

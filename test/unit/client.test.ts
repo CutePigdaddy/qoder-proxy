@@ -130,11 +130,10 @@ describe('QoderClient credential rejection recovery', () => {
     expect(spy.forceRefresh).not.toHaveBeenCalled();
   });
 
-  it('does not retry a tier resource limit', async () => {
+  it('waits out a model-queue refusal and retries while the budget lasts', async () => {
     const { spy, store } = fakeStore();
-    // Same business code as congestion, but the queue is empty and the service
-    // is up: waiting two seconds cannot conjure a slot, so the request must
-    // fail on the first attempt instead of burning the upstream's hint twice.
+    // 10605 + RESOURCE_LIMIT 是「这个模型此刻没容量」，不是「账号没资格」：
+    // 企业版 p1 一样会撞到。所以按上游的 retryAfterSeconds 等一轮再试。
     const limitBody = JSON.stringify({
       code: '403',
       message: JSON.stringify({
@@ -154,12 +153,47 @@ describe('QoderClient credential rejection recovery', () => {
       .mockImplementation(async () => new Response(sseFrame(limitBody, 403), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
 
-    const client = new QoderClient({ endpoints, credentials: store });
+    // 预算压到 40ms、轮数 2：等待变成毫秒级，测试不必真等 2s。上游 hint 是 2s，
+    // 会被预算截断 —— 这正是预算的用途（别让一次手气差钉死请求）。
+    const client = new QoderClient({
+      endpoints,
+      credentials: store,
+      queueWaitBudgetMs: 40,
+      maxQueueRetries: 2,
+    });
+    const run = collect(client.chat(request, model, new AbortController().signal));
+
+    await expect(run).rejects.toBeInstanceOf(ResourceLimitError);
+    // 预算是**累计**的：第一轮就把 40ms 用完，于是只多打了一次（1 原始 + 1 重试），
+    // 第二轮算出的可等时间为 0 就直接放弃。这正是预算要的行为。
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(spy.forceRefresh).not.toHaveBeenCalled();
+  });
+
+  it('fails immediately on a model-queue refusal when the wait budget is zero', async () => {
+    const { store } = fakeStore();
+    const limitBody = JSON.stringify({
+      code: '403',
+      message: JSON.stringify({
+        code: '10605',
+        message: JSON.stringify({ isQueued: false, queueCount: 0, queueType: 'p3' }),
+        subCode: 'RESOURCE_LIMIT',
+      }),
+    });
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async () => new Response(sseFrame(limitBody, 403), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new QoderClient({
+      endpoints,
+      credentials: store,
+      queueWaitBudgetMs: 0,
+    });
     const run = collect(client.chat(request, model, new AbortController().signal));
 
     await expect(run).rejects.toBeInstanceOf(ResourceLimitError);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(spy.forceRefresh).not.toHaveBeenCalled();
   });
 
   it('retries rate limiting with back-off before surfacing 429', async () => {
@@ -379,6 +413,51 @@ describe('QoderClient upstream body shape', () => {
 });
 
 describe('usage cache accounting', () => {
+  it('surfaces upstream credits so "did this cost anything" is readable from our own logs', async () => {
+    const { store } = fakeStore();
+    // 免费通道的 usage 会明确写 credits: 0 —— 与「没有这个字段」不是一回事，
+    // 前者是上游的原话（没扣），后者只是我们不知道。
+    const upstreamUsage = {
+      choices: [],
+      usage: {
+        prompt_tokens: 12,
+        completion_tokens: 3,
+        total_tokens: 15,
+        credits: 0,
+        original_credits: 0,
+        billable: false,
+      },
+    };
+    const payload =
+      sseFrame(JSON.stringify({ choices: [{ delta: { content: 'hi' } }] })) +
+      sseFrame(JSON.stringify(upstreamUsage)) +
+      'data: [DONE]\n';
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => new Response(payload, { status: 200 })));
+
+    const client = new QoderClient({ endpoints, credentials: store });
+    const events = await collect(client.chat(request, model, new AbortController().signal));
+
+    const usage = events.find((event) => event.type === 'usage');
+    expect(usage).toMatchObject({ credits: 0, originalCredits: 0, billable: false });
+  });
+
+  it('leaves credits undefined when the upstream omits the field', async () => {
+    const { store } = fakeStore();
+    const payload =
+      sseFrame(JSON.stringify({ choices: [{ delta: { content: 'hi' } }] })) +
+      sseFrame(JSON.stringify({ choices: [], usage: { prompt_tokens: 5, completion_tokens: 1 } })) +
+      'data: [DONE]\n';
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => new Response(payload, { status: 200 })));
+
+    const client = new QoderClient({ endpoints, credentials: store });
+    const events = await collect(client.chat(request, model, new AbortController().signal));
+
+    const usage = events.find((event) => event.type === 'usage') as Extract<IREvent, { type: 'usage' }>;
+    // 关键断言：没这个字段就是 undefined，不能被 `?? 0` 抹成「上游说没花钱」。
+    expect(usage.credits).toBeUndefined();
+    expect(usage.billable).toBeUndefined();
+  });
+
   it('passes upstream cache details through to the final usage', async () => {
     const { store } = fakeStore();
     // Verbatim usage shape captured 2026-10-20 from the live gateway.
