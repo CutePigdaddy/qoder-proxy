@@ -211,7 +211,8 @@ qoder_proxy/
 |---|---|
 | 登录被拒（无 code 或 105） | 401 |
 | 配额（110, 112-119, 122） | 429 |
-| 繁忙/排队（10605） | 503 + `Retry-After`（取 `retryAfterSeconds`，缺省 30） |
+| 档位资源限制（10605 + `RESOURCE_LIMIT`，队列为空） | 503 + `Retry-After: 60`，**不重试** |
+| 繁忙/排队（10605，`queueCount > 0`） | 503 + `Retry-After`（取 `retryAfterSeconds`，缺省 30） |
 | 答案开始前失败 | 透传 Qoder status |
 | 答案开始后失败 | 流以 error 帧结束（不可再改状态码） |
 | 其他 | 502 |
@@ -222,10 +223,13 @@ qoder_proxy/
 |---|---|
 | 429 限流 / 503 繁忙，且**尚未流出任何内容** | 内部退避重试最多 2 次：尊重 `retryAfterSeconds`，否则 2s/4s，单次上限 `RETRY_MAX_WAIT_MS`；等待期间客户端断开则立即放弃并释放并发槽 |
 | 429 **配额耗尽**（业务码 110, 112-119, 122） | **终态，不重试**，立即透传 |
+| 503 **档位资源限制**（10605 + `RESOURCE_LIMIT`，`queueCount = 0`） | **终态，不重试**；`Retry-After: 60`（上游给的 2s 只对队满有意义） |
 | 401 凭据被拒 | 强制刷新一次后重试；仍失败则透传 |
 | 已流出内容后失败 | 不重试，以流内 error 帧结束（状态码此时已无法更改） |
 
 同一个 429 承载「限流（瞬态）」与「配额（终态）」两种语义，所以「是否可重试」必须由错误类型 `QuotaExhaustedError` 判定，**不能只看 status**。
+
+10605 同理承载两种语义，要靠 `subCode` 与队列状态区分：`subCode: "RESOURCE_LIMIT"` 配合 `queueCount: 0`、`isQueued: false`、`serviceAvailable: true`，意思是服务正常、队列为空，只是这个账号档位（`queueType: p3`）当前没有资源份额——此时重试只会把上游那个 `retryAfterSeconds: 2` 白等两次（实测每次失败从 4–5s 降到 0.2–0.3s）。判定由类型 `ResourceLimitError` 承担，同样**先于状态码**：503 既可能是真拥堵，也可能是档位无资源。
 
 **工具调用解析失败的处理**（先例 #132 的教训）：流中途截断或无法解析的 tool call，**绝不**当作正常文本答案转发给客户端 —— 应以错误结束该轮（502 或流的 error 帧且不带 finish reason），让上层 agent 重试。代码块或正文里的假标签必须保持为纯文本。
 
