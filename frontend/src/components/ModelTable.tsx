@@ -1,5 +1,6 @@
+import { useEffect, useMemo, useState } from 'react';
 import type { ModelEntry } from '../types';
-import { compact, grouped, hitTone, percent } from '../utils/format';
+import { compact, hitTone, percent } from '../utils/format';
 
 type SortKey = 'default' | 'context' | 'price' | 'usage';
 
@@ -23,9 +24,8 @@ const SORTS: Array<{ key: SortKey; label: string }> = [
 
 /** 公开人民币价目（元/百万 tokens）；免费模型单独用文案。 */
 function priceText(entry: ModelEntry): string {
-  if (!entry.rate) return '未定价';
-  const r = entry.rate;
-  return `${grouped(r.input)} / ${grouped(r.output)} (缓存 ${grouped(r.cachedInput)})`;
+  if (entry.pricing.free) return '免费';
+  return entry.pricing.factor === null ? '—' : String(entry.pricing.factor);
 }
 
 function byContextNewest(a: ModelEntry, b: ModelEntry): number {
@@ -35,12 +35,9 @@ function byContextNewest(a: ModelEntry, b: ModelEntry): number {
 }
 
 function byPriceCheapest(a: ModelEntry, b: ModelEntry): number {
-  if (!a.rate && !b.rate) return 0;
-  if (!a.rate) return 1;
-  if (!b.rate) return -1;
-  // 按输入价排序，平局看输出价
-  if (a.rate.input !== b.rate.input) return a.rate.input - b.rate.input;
-  return a.rate.output - b.rate.output;
+  if (a.pricing.factor === null) return 1;
+  if (b.pricing.factor === null) return -1;
+  return a.pricing.factor - b.pricing.factor;
 }
 
 function statusBadges(entry: ModelEntry): React.ReactNode[] {
