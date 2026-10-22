@@ -535,6 +535,11 @@ button {
 }
 
 /* ---------- 表格 ---------- */
+/* 日志页的「请求 / 错误」页签：.stack 是 flex 列，不靠左会拉满整行 */
+.log-tabs {
+  align-self: flex-start;
+}
+
 .table-scroll {
   overflow: auto;
   max-height: 520px;
@@ -615,6 +620,20 @@ button {
   border-radius: 50%;
   background: var(--poor);
   vertical-align: middle;
+}
+
+/* 错误日志的消息列：上游报错常带整段 JSON，单行截断、悬停看全文 */
+.data-table .msg-cell {
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+}
+
+/* 5xx 比 4xx 更值得一眼看到：复用 poor 色，不新增色板 */
+.data-table .status-5xx {
+  color: var(--poor);
+  font-weight: 600;
 }
 
 /* ---------- 空状态 ---------- */

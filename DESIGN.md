@@ -245,6 +245,8 @@ qoder_proxy/
 | `BODY_LIMIT` | 10485760 | 请求体上限（10MB） |
 | `MODEL_FALLBACK` | auto | 未知模型名回退档位（`config/models.json` 未写 `fallback` 时生效） |
 | `TOKEN_CACHE_PATH` | `./.cache/tokens.json` | jt/jrt 缓存位置（可丢） |
+| `USAGE_LOG_PATH` | `./.cache/usage.jsonl` | 每请求一行用量明细（面板数据源，环形保留 5000 条） |
+| `ERROR_LOG_PATH` | `./.cache/errors.jsonl` | 失败请求的错误明细（日志页「错误」页签，环形保留 2000 条） |
 | `TOKEN_MARKER_MODE` | move | `<total_tokens>` 标记处理：move/strip/keep |
 | `CACHE_DIAGNOSTICS` | 0 | `1` 时输出缓存哈希网格（排查用，默认关） |
 | `DOMAIN` | 部署时填 | Caddyfile 签发证书用 |
@@ -303,6 +305,14 @@ curl https://$DOMAIN/health
 
 **日志**：pino 结构化 JSON，每请求一行 —— 模型、耗时、上游状态码、token 数、是否流式、队列等待时长。
 **绝不记录**：PAT、job token、完整请求体 / 响应体（含敏感对话内容）。
+
+**面板日志**（`/v1/usage/dashboard` + `/v1/usage/logs`）：用量与错误分别落两份 JSONL
+（`UsageStore` / `ErrorStore`，内存环形缓冲 + 追加写 + 超限压缩），重启不丢。
+错误日志只记失败请求，字段是「环节（validate/queue/upstream）+ 语义类型
+（quota/credential/busy/rate-limit/timeout/client-gone/invalid/input-limit/upstream）
++ 脱敏截断消息」——429 的两种语义靠类型区分，不靠状态码。错误单独成文件是因为
+错误量远小于成功量，混进用量环形缓冲会被几分钟挤掉。校验类失败（非法 JSON、
+schema 不合、触发网关输入上限）只进错误日志、不进用量统计，`errorRate` 口径不变。
 
 **指标**（`/metrics`，Prometheus 文本格式）：
 

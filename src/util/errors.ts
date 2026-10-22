@@ -66,6 +66,42 @@ export interface UpstreamFailure {
   body: string;
 }
 
+/** 失败环节：请求在网关的哪一层被拒。 */
+export type ErrorStage = 'validate' | 'queue' | 'upstream';
+
+/**
+ * 失败的语义分类——比 HTTP 状态码更接近「为什么失败」。
+ * 429 承载两种语义（限流 vs 配额耗尽）正是需要它的证明（见 DESIGN.md §7）。
+ */
+export type ErrorType =
+  | 'quota' // QuotaExhaustedError：配额耗尽，终态
+  | 'credential' // 凭据被上游拒绝（401/105）
+  | 'busy' // 容量已满（网关排队或上游 503）
+  | 'rate-limit' // 上游限流（瞬态）
+  | 'timeout' // 我方 deadline 到期（排队或上游阶段）
+  | 'client-gone' // 客户端断开（499）
+  | 'invalid' // 请求本身无效（非 JSON / schema 不合）
+  | 'input-limit' // 触发面板设置的网关输入上限
+  | 'upstream'; // 其他上游错误
+
+/**
+ * 把「错误对象 + 最终 HTTP 状态」归入语义分类。
+ * 类型判定优先于状态码：QuotaExhaustedError 虽然是 429，但它不是限流。
+ * 504 的检查在 ClientGoneError 之前：排队超时抛的就是 ClientGoneError，
+ * 区分「谁先放手」靠的是调用方传入的 status（499 = 客户端、504 = 我方）。
+ */
+export function classifyFailure(error: unknown, status: number): ErrorType {
+  if (error instanceof QuotaExhaustedError) return 'quota';
+  if (error instanceof CredentialRejectedError) return 'credential';
+  if (error instanceof BusyError) return 'busy';
+  if (status === 504) return 'timeout';
+  if (error instanceof ClientGoneError || status === 499) return 'client-gone';
+  if (status === 400) return 'invalid';
+  if (status === 429) return 'rate-limit';
+  if (status === 503) return 'busy';
+  return 'upstream';
+}
+
 interface FailureDetails {
   code?: number;
   retryAfter?: number;

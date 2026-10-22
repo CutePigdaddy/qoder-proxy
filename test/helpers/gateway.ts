@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { AdmissionGate } from '../../src/concurrency/admission.js';
 import type { AppConfig } from '../../src/config.js';
 import type { IREvent, IRRequest } from '../../src/ir/types.js';
+import { ErrorStore } from '../../src/obs/errorStore.js';
 import { ModelLimits } from '../../src/obs/modelLimits.js';
 import { loadRateCard } from '../../src/obs/pricing.js';
 import { UsageStore } from '../../src/obs/usageStore.js';
@@ -41,6 +42,7 @@ export function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     bodyLimit: 64 * 1024,
     tokenCachePath: '.cache/tokens.json',
     usageLogPath: '.cache/usage.jsonl',
+    errorLogPath: '.cache/errors.jsonl',
     modelLimitsPath: '.cache/model-limits.json',
     logLevel: 'silent',
     quotaTtlMs: 60_000,
@@ -179,9 +181,12 @@ export function createHarness(options: HarnessOptions = {}): Harness {
         cached: false,
       }),
     } as unknown as Deps['quota'],
-    // In-memory only: tests never touch the real usage log on disk.
+    // In-memory only: tests never touch the real usage/error logs on disk.
     usage: new UsageStore({
       path: join(tmpdir(), `qoder-usage-${process.pid}-${++harnessSeq}.jsonl`),
+    }),
+    errors: new ErrorStore({
+      path: join(tmpdir(), `qoder-errors-${process.pid}-${++harnessSeq}.jsonl`),
     }),
     // 真实价目表：目录页与成本断言都基于 config/pricing.json 的实际内容，
     // 价目改了测试会跟着失败，这正是我们要的（避免测试与线上价目脱节）。

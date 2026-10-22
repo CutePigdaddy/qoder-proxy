@@ -95,6 +95,40 @@ export interface DashboardData {
   recentLogs: UsageRow[];
 }
 
+/** 失败环节：validate 网关校验 / queue 排队 / upstream 上游调用 */
+export type ErrorStage = 'validate' | 'queue' | 'upstream';
+
+/** 失败的语义分类：比 HTTP 状态码更接近「为什么失败」 */
+export type ErrorType =
+  | 'quota'
+  | 'credential'
+  | 'busy'
+  | 'rate-limit'
+  | 'timeout'
+  | 'client-gone'
+  | 'invalid'
+  | 'input-limit'
+  | 'upstream';
+
+/** 错误明细行；与后端 routes/usage.ts 的 ErrorRow 对齐 */
+export interface ErrorRow {
+  id: string;
+  timestamp: number;
+  application: string;
+  model: string;
+  status: number;
+  stage: ErrorStage;
+  type: ErrorType;
+  message: string;
+  durationMs: number;
+}
+
+/** 日志页数据：请求与错误两份明细一次拉取 */
+export interface LogsData {
+  requests: UsageRow[];
+  errors: ErrorRow[];
+}
+
 /** live：配置与上游都有；config-only：仅配置；upstream-only：上游新增未映射 */
 export type ModelAvailability = 'live' | 'config-only' | 'upstream-only';
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import CacheStats from './components/CacheStats';
 import CostPanel from './components/CostPanel';
+import ErrorLogTable from './components/ErrorLogTable';
 import KeyMetrics from './components/KeyMetrics';
 import ModelTable from './components/ModelTable';
 import RequestLogTable from './components/RequestLogTable';
@@ -10,12 +11,13 @@ import {
   clearStoredKey,
   describeError,
   fetchDashboard,
+  fetchLogs,
   fetchModels,
   getStoredKey,
   saveModelLimits,
   storeKey,
 } from './services/api';
-import type { DashboardData, ModelEntry } from './types';
+import type { DashboardData, LogsData, ModelEntry } from './types';
 import { clock } from './utils/format';
 
 const RANGES = [
@@ -28,17 +30,31 @@ const RANGES = [
 
 const POLL_MS = 30_000;
 
-type View = 'usage' | 'models';
+type View = 'usage' | 'models' | 'logs';
+/** 日志页内的页签：请求明细 / 错误明细 */
+type LogTab = 'requests' | 'errors';
 
-/** 视图放在 hash 里：刷新后停在原页面，也不需要引路由库。 */
-function readView(): View {
-  return window.location.hash === '#models' ? 'models' : 'usage';
+interface Route {
+  view: View;
+  logTab: LogTab;
+}
+
+/** 路由放在 hash 里：刷新后停在原页面（含日志页签），也不需要引路由库。 */
+function readRoute(): Route {
+  const hash = window.location.hash;
+  if (hash === '#models') return { view: 'models', logTab: 'requests' };
+  if (hash === '#logs' || hash === '#logs/errors') {
+    return { view: 'logs', logTab: hash === '#logs/errors' ? 'errors' : 'requests' };
+  }
+  return { view: 'usage', logTab: 'requests' };
 }
 
 function App() {
+  const initial = readRoute();
   const [apiKey, setApiKey] = useState(getStoredKey);
   const [keyDraft, setKeyDraft] = useState('');
-  const [view, setView] = useState<View>(readView);
+  const [view, setView] = useState<View>(initial.view);
+  const [logTab, setLogTab] = useState<LogTab>(initial.logTab);
   const [hours, setHours] = useState(24);
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -48,7 +64,11 @@ function App() {
   const [modelsRefreshing, setModelsRefreshing] = useState(false);
   const [modelsError, setModelsError] = useState<string | null>(null);
 
+  const [logs, setLogs] = useState<LogsData | null>(null);
+  const [logsError, setLogsError] = useState<string | null>(null);
+
   const reqRef = useRef(0);
+  const logsReqRef = useRef(0);
 
   const load = useCallback(async () => {
     if (!apiKey) return;
@@ -67,13 +87,38 @@ function App() {
   // 只看模型目录时停掉用量轮询：那是另一份数据，没必要继续拉
   const { refresh, lastUpdated, refreshing } = useAutoRefresh(load, POLL_MS, view === 'usage');
 
+  const loadLogs = useCallback(async () => {
+    if (!apiKey) return;
+    const id = ++logsReqRef.current;
+    try {
+      const next = await fetchLogs(hours, apiKey);
+      if (id !== logsReqRef.current) return;
+      setLogs(next);
+      setLogsError(null);
+    } catch (err) {
+      if (id !== logsReqRef.current) return;
+      setLogsError(describeError(err));
+    }
+  }, [apiKey, hours]);
+
+  // 日志页有自己的轮询；离开日志页就停，与模型页一致
+  const logsPoll = useAutoRefresh(loadLogs, POLL_MS, view === 'logs');
+
   // 首次进入与切换时间范围都走 refresh，让「上次刷新」时间立刻有值
   useEffect(() => {
     if (apiKey && view === 'usage') refresh();
   }, [apiKey, hours, view, refresh]);
 
   useEffect(() => {
-    const onHash = () => setView(readView());
+    if (apiKey && view === 'logs') logsPoll.refresh();
+  }, [apiKey, hours, view, logsPoll.refresh]);
+
+  useEffect(() => {
+    const onHash = () => {
+      const route = readRoute();
+      setView(route.view);
+      setLogTab(route.logTab);
+    };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
@@ -116,8 +161,17 @@ function App() {
   );
 
   const go = (next: View): void => {
-    window.location.hash = next === 'models' ? '#models' : '';
+    const hash = next === 'models' ? '#models' : next === 'logs' ? '#logs' : '';
+    if (window.location.hash !== hash) window.location.hash = hash;
     setView(next);
+  };
+
+  /** 日志页签同样进 hash：刷新后停在同一页签，也方便直接分享错误页。 */
+  const goLogs = (tab: LogTab): void => {
+    const hash = tab === 'errors' ? '#logs/errors' : '#logs';
+    if (window.location.hash !== hash) window.location.hash = hash;
+    setView('logs');
+    setLogTab(tab);
   };
 
   if (!apiKey) {
@@ -167,6 +221,15 @@ function App() {
               ) : (
                 '正在载入…'
               )
+            ) : view === 'logs' ? (
+              logsPoll.lastUpdated ? (
+                <>
+                  <span className={`live${logsPoll.refreshing ? ' is-busy' : ''}`} aria-hidden /> 请求与错误日志 ·
+                  每 30 秒自动刷新 · 上次 {clock(logsPoll.lastUpdated)}
+                </>
+              ) : (
+                '请求与错误日志 · 正在载入…'
+              )
             ) : (
               '模型目录 · 需要时手动刷新'
             )}
@@ -189,9 +252,16 @@ function App() {
             >
               模型
             </button>
+            <button
+              className={view === 'logs' ? 'is-active' : ''}
+              onClick={() => go('logs')}
+              aria-pressed={view === 'logs'}
+            >
+              日志
+            </button>
           </div>
 
-          {view === 'usage' && (
+          {view !== 'models' && (
             <div className="segmented" role="group" aria-label="时间范围">
               {RANGES.map((range) => (
                 <button
@@ -213,6 +283,7 @@ function App() {
               setApiKey('');
               setData(null);
               setModels([]);
+              setLogs(null);
             }}
           >
             更换 Key
@@ -232,6 +303,60 @@ function App() {
             onSaveLimit={saveLimit}
           />
         </main>
+      ) : view === 'logs' ? (
+        <>
+          {logsError && (
+            <div className="banner" role="alert">
+              <span>{logsError}</span>
+              <button className="btn btn-ghost" onClick={logsPoll.refresh}>
+                重试
+              </button>
+            </div>
+          )}
+
+          {logs ? (
+            <main className="stack">
+              <div className="log-tabs segmented" role="group" aria-label="日志类型">
+                <button
+                  className={logTab === 'requests' ? 'is-active' : ''}
+                  onClick={() => goLogs('requests')}
+                  aria-pressed={logTab === 'requests'}
+                >
+                  请求
+                </button>
+                <button
+                  className={logTab === 'errors' ? 'is-active' : ''}
+                  onClick={() => goLogs('errors')}
+                  aria-pressed={logTab === 'errors'}
+                >
+                  错误{logs.errors.length > 0 ? ` · ${logs.errors.length}` : ''}
+                </button>
+              </div>
+
+              {logTab === 'requests' ? (
+                logs.requests.length > 0 ? (
+                  <RequestLogTable rows={logs.requests} />
+                ) : (
+                  <section className="panel empty">
+                    <h2>这个时间范围内还没有调用记录</h2>
+                    <p>
+                      发一次 <code>/v1/chat/completions</code> 调用后刷新，这里会出现真实请求。
+                    </p>
+                  </section>
+                )
+              ) : (
+                <ErrorLogTable rows={logs.errors} />
+              )}
+            </main>
+          ) : (
+            !logsError && (
+              <main className="stack" aria-busy>
+                <div className="skeleton" style={{ height: 40, maxWidth: 160 }} />
+                <div className="skeleton" style={{ height: 380 }} />
+              </main>
+            )
+          )}
+        </>
       ) : (
         <>
           {error && (

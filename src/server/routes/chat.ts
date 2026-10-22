@@ -9,7 +9,7 @@ import { CompletionAccumulator } from '../../openai/nonStreamAdapter.js';
 import { estimatePromptTokens } from '../../openai/inputBudget.js';
 import { parseChatRequest } from '../../openai/requestAdapter.js';
 import { OpenAIStreamEncoder, toOpenAIUsage, type OpenAIUsage } from '../../openai/streamAdapter.js';
-import { ClientGoneError, HttpError } from '../../util/errors.js';
+import { ClientGoneError, classifyFailure, HttpError, type ErrorStage, type ErrorType } from '../../util/errors.js';
 import type { Deps } from '../deps.js';
 
 function errorResponse(c: Context, status: number, message: string, retryAfter?: number): Response {
@@ -32,6 +32,12 @@ function errorResponse(c: Context, status: number, message: string, retryAfter?:
 export function registerChat(app: Hono, deps: Deps): void {
   app.post('/v1/chat/completions', async (c) => {
     const started = Date.now();
+    // Hoisted so every failure path can classify "who hung up first":
+    // the caller's signal is knowable from the start, our own deadline is not.
+    const clientSignal = c.req.raw.signal;
+    const ua = c.req.header('user-agent');
+    const application = inferApplication(ua);
+    let deadlineFired = false;
     let release: Release | null = null;
     let cleanup: (() => void) | null = null;
     let modelKey = 'unknown';
@@ -46,11 +52,10 @@ export function registerChat(app: Hono, deps: Deps): void {
       // upstream usage frame, so "新增输入" is prompt minus cache hits.
       const prompt = tokens?.prompt ?? 0;
       const cached = tokens?.cached ?? 0;
-      const ua = c.req.header('user-agent');
       deps.usage.record({
         ts: Date.now(),
         model: modelKey,
-        application: inferApplication(ua),
+        application,
         provider: 'Qoder CN',
         inputTokens: Math.max(0, prompt - cached),
         cachedTokens: cached,
@@ -61,16 +66,51 @@ export function registerChat(app: Hono, deps: Deps): void {
       });
     };
 
+    /**
+     * One row per FAILED request for the error log. Message is already
+     * redacted by the caller (the same string the client sees); truncation
+     * keeps a single pathological upstream from bloating the JSONL.
+     */
+    const recordError = (
+      status: number,
+      stage: ErrorStage,
+      message: string,
+      opts: { type?: ErrorType; error?: unknown } = {},
+    ): void => {
+      const type =
+        opts.type ??
+        (clientSignal.aborted
+          ? 'client-gone'
+          : deadlineFired
+            ? 'timeout'
+            : classifyFailure(opts.error, status));
+      deps.errors.record({
+        ts: Date.now(),
+        model: modelKey,
+        application,
+        status,
+        stage,
+        type,
+        message: message.slice(0, 300),
+        durationMs: Date.now() - started,
+      });
+    };
+
     try {
       let body: unknown;
       try {
         body = await c.req.json();
       } catch {
+        recordError(400, 'validate', 'Request body must be valid JSON');
         return errorResponse(c, 400, 'Request body must be valid JSON');
       }
 
       const parsed = parseChatRequest(body);
-      if (!parsed.ok) return errorResponse(c, 400, parsed.error);
+      if (!parsed.ok) {
+        // 校验失败不进用量统计（那会改变 errorRate 口径），但要在错误日志里可查。
+        recordError(400, 'validate', parsed.error);
+        return errorResponse(c, 400, parsed.error);
+      }
       const req = parsed.value;
 
       const model = await deps.resolver.resolve(req.model);
@@ -84,25 +124,23 @@ export function registerChat(app: Hono, deps: Deps): void {
       if (inputLimit !== null) {
         const estimated = estimatePromptTokens(req);
         if (estimated > inputLimit) {
-          return errorResponse(
-            c,
-            400,
+          const message =
             `Estimated input ${Math.round(estimated / 1000)}K tokens exceeds the gateway limit of ` +
-              `${Math.round(inputLimit / 1000)}K set for ${model.id}. Adjust or clear it in the dashboard. ` +
-              'The number is an estimate (upstream does not enforce a limit itself).',
-          );
+            `${Math.round(inputLimit / 1000)}K set for ${model.id}. Adjust or clear it in the dashboard. ` +
+            'The number is an estimate (upstream does not enforce a limit itself).';
+          recordError(400, 'validate', message, { type: 'input-limit' });
+          return errorResponse(c, 400, message);
         }
       }
 
       // Arm the deadline before queueing: a request that never gets a slot must
       // not be immortal. The same controller then covers the upstream call.
       const controller = new AbortController();
-      const timer = setTimeout(
-        () => controller.abort(new Error('request timeout')),
-        deps.config.requestTimeoutMs,
-      );
+      const timer = setTimeout(() => {
+        deadlineFired = true;
+        controller.abort(new Error('request timeout'));
+      }, deps.config.requestTimeoutMs);
 
-      const clientSignal = c.req.raw.signal;
       if (clientSignal.aborted) controller.abort();
       else clientSignal.addEventListener('abort', () => controller.abort(), { once: true });
 
@@ -121,15 +159,16 @@ export function registerChat(app: Hono, deps: Deps): void {
           // Distinguish "caller hung up" from "our own deadline expired".
           const gone = clientSignal.aborted;
           const status = gone ? 499 : 504;
+          const message = gone
+            ? 'Client closed the connection while queued'
+            : 'Request timed out while queued';
           record(String(status));
-          return errorResponse(
-            c,
-            status,
-            gone ? 'Client closed the connection while queued' : 'Request timed out while queued',
-          );
+          recordError(status, 'queue', message, { error });
+          return errorResponse(c, status, message);
         }
         const retryAfter = error instanceof HttpError && error.retryAfter ? error.retryAfter : 5;
         record('429');
+        recordError(429, 'queue', 'Gateway is at capacity, retry shortly', { error });
         return errorResponse(c, 429, 'Gateway is at capacity, retry shortly', retryAfter);
       }
       deps.updateGauges();
@@ -188,6 +227,7 @@ export function registerChat(app: Hono, deps: Deps): void {
             const status = error instanceof HttpError ? error.status : 502;
             metrics.upstreamErrors.inc({ status: String(status) });
             record(String(status));
+            recordError(status, 'upstream', message, { error });
             deps.logger.warn({ err: message, model: modelKey, status }, 'stream failed');
 
             try {
@@ -226,6 +266,7 @@ export function registerChat(app: Hono, deps: Deps): void {
       const message = redactSecrets(error instanceof Error ? error.message : String(error));
       metrics.upstreamErrors.inc({ status: String(status) });
       record(String(status));
+      recordError(status, 'upstream', message, { error });
       deps.logger.warn({ err: message, model: modelKey, status }, 'request failed');
       return errorResponse(
         c,

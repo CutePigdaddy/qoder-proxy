@@ -1,4 +1,4 @@
-import type { DashboardData, ModelEntry, ModelsResponse } from '../types';
+import type { DashboardData, LogsData, ModelEntry, ModelsResponse } from '../types';
 
 const API_KEY_STORAGE = 'qoder-proxy-api-key';
 const TIMEOUT_MS = 20_000;
@@ -47,6 +47,11 @@ async function getJson<T>(path: string, apiKey: string): Promise<T> {
 
 export function fetchDashboard(hours: number, apiKey: string): Promise<DashboardData> {
   return getJson<DashboardData>(`/v1/usage/dashboard?hours=${hours}`, apiKey);
+}
+
+/** 日志页数据：请求与错误明细一并返回，limit 放大（日志页是浏览器不是概览）。 */
+export function fetchLogs(hours: number, apiKey: string): Promise<LogsData> {
+  return getJson<LogsData>(`/v1/usage/logs?hours=${hours}`, apiKey);
 }
 
 /** 模型目录；refresh 绕过网关的 10 分钟目录缓存，hours 决定「近期用量」窗口。 */

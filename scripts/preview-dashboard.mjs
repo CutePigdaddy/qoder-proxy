@@ -281,6 +281,120 @@ function models() {
   };
 }
 
+/**
+ * 日志页 mock：请求明细与错误明细。错误样本覆盖全部环节与类型，
+ * 消息文案取自网关真实输出（脱敏后），用来检查截断与类型标签。
+ */
+function logsMock() {
+  const now = Date.now();
+  const requests = Array.from({ length: 120 }, (_, i) => {
+    const ts = now - i * 45_000;
+    const model = i % 19 === 18 ? UNPRICED_MODEL : pick(MODELS, i);
+    const row = {
+      id: `req-${ts}-${i}`,
+      timestamp: ts,
+      application: pick(APPLICATIONS, i),
+      provider: 'Qoder CN',
+      model,
+      inputTokens: Math.floor(Math.random() * 2_800),
+      outputTokens: 80 + Math.floor(Math.random() * 3_000),
+      cacheHitTokens: 6_000 + Math.floor(Math.random() * 90_000),
+      status: i % 23 === 22 ? 502 : 200,
+    };
+    const priced = priceRow(row);
+    return { ...row, cost: priced ? round(priced.cost) : null };
+  });
+
+  const samples = [
+    { stage: 'upstream', type: 'upstream', status: 502, model: 'Qwen3.8-Max', message: 'Upstream error 500' },
+    {
+      stage: 'upstream',
+      type: 'quota',
+      status: 429,
+      model: 'Auto',
+      message: 'Upstream quota exhausted (code 110)',
+    },
+    {
+      stage: 'queue',
+      type: 'busy',
+      status: 429,
+      model: 'DeepSeek-V4-Pro',
+      message: 'Gateway is at capacity, retry shortly',
+    },
+    {
+      stage: 'upstream',
+      type: 'credential',
+      status: 401,
+      model: 'Qwen3.7-Plus',
+      message: 'Upstream rejected the credential (code 105)',
+    },
+    {
+      stage: 'upstream',
+      type: 'timeout',
+      status: 504,
+      model: 'GLM-5.3',
+      message: 'Upstream request failed: Error: request timeout',
+    },
+    {
+      stage: 'validate',
+      type: 'input-limit',
+      status: 400,
+      model: 'Kimi-K3',
+      message:
+        'Estimated input 231K tokens exceeds the gateway limit of 200K set for Kimi-K3. Adjust or clear it in the dashboard.',
+    },
+    { stage: 'validate', type: 'invalid', status: 400, model: 'unknown', message: 'Request body must be valid JSON' },
+    {
+      stage: 'validate',
+      type: 'invalid',
+      status: 400,
+      model: 'unknown',
+      message: 'messages: Required, max_tokens: Expected number, received string',
+    },
+    {
+      stage: 'queue',
+      type: 'client-gone',
+      status: 499,
+      model: 'Qwen3.8-Flash',
+      message: 'Client closed the connection while queued',
+    },
+    {
+      stage: 'upstream',
+      type: 'rate-limit',
+      status: 429,
+      model: 'MiniMax-M2.7',
+      message: 'Upstream rate limited',
+    },
+    {
+      stage: 'upstream',
+      type: 'upstream',
+      status: 502,
+      model: 'Kimi-K2.8-Preview',
+      message: 'Upstream SSE payload was not valid JSON',
+    },
+    {
+      stage: 'queue',
+      type: 'timeout',
+      status: 504,
+      model: 'DeepSeek-Flash',
+      message: 'Request timed out while queued',
+    },
+  ];
+
+  const errors = samples.map((sample, i) => {
+    const ts = now - (i + 1) * 210_000;
+    return {
+      id: `err-${ts}-${i}`,
+      timestamp: ts,
+      application: pick(APPLICATIONS, i),
+      durationMs: 120 + Math.floor(Math.random() * 6_000),
+      ...sample,
+    };
+  });
+
+  return { requests, errors };
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
 
@@ -313,6 +427,13 @@ const server = createServer(async (req, res) => {
     }
 
     const hours = Number(url.searchParams.get('hours') ?? 24);
+
+    if (url.pathname === '/v1/usage/logs') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(logsMock()));
+      return;
+    }
+
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(dashboard(hours)));
     return;

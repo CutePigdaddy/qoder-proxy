@@ -19,6 +19,9 @@ const EnvSchema = z.object({
   // Per-request usage log backing the dashboard. Lives beside the token cache so
   // it rides the same persisted volume; sees append-only writes.
   USAGE_LOG_PATH: z.string().default('.cache/usage.jsonl'),
+  // 失败请求的错误日志（日志页「错误」页签）。与用量日志同卷、同模式，
+  // 但单独成文件：错误量远小于成功量，共用环形缓冲会被很快挤掉。
+  ERROR_LOG_PATH: z.string().default('.cache/errors.jsonl'),
   // 面板里设置的每模型输入上限；空文件 = 不限制
   MODEL_LIMITS_PATH: z.string().default('.cache/model-limits.json'),
   QODER_QUOTA_TTL_MS: z.coerce.number().int().min(0).default(60_000),
@@ -68,6 +71,7 @@ export interface AppConfig {
   bodyLimit: number;
   tokenCachePath: string;
   usageLogPath: string;
+  errorLogPath: string;
   modelLimitsPath: string;
   logLevel: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent';
   quotaTtlMs: number;
@@ -97,6 +101,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     bodyLimit: e.BODY_LIMIT,
     tokenCachePath: e.TOKEN_CACHE_PATH,
     usageLogPath: e.USAGE_LOG_PATH,
+    errorLogPath: e.ERROR_LOG_PATH,
     modelLimitsPath: e.MODEL_LIMITS_PATH,
     logLevel: e.LOG_LEVEL,
     quotaTtlMs: e.QODER_QUOTA_TTL_MS,

@@ -39,6 +39,12 @@ export function dateTime(ts: number): string {
   return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+/** 单次请求耗时：秒级及以上给一位小数，毫秒级原样显示（失败常在 1s 内）。 */
+export function duration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return '—';
+  return ms >= 1_000 ? `${(ms / 1_000).toFixed(1)}s` : `${Math.round(ms)}ms`;
+}
+
 /** 命中率分档：>=85 优，>=60 良，其余关注。阈值偏高是有意的——
  *  长上下文会话的缓存命中率正常就在 90% 以上，60% 已经说明前缀在失配。 */
 export function hitTone(rate: number): 'good' | 'fair' | 'poor' {

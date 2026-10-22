@@ -1,4 +1,6 @@
 import type { Hono } from 'hono';
+import type { ErrorRecord } from '../../obs/errorStore.js';
+import type { ErrorStage, ErrorType } from '../../util/errors.js';
 import {
   EMPTY_RATE_CARD,
   priceUsage,
@@ -106,6 +108,25 @@ export interface DashboardData {
   recentLogs: UsageRow[];
 }
 
+/** 错误明细：比请求明细多「环节 / 语义分类 / 消息」，token 列没有（失败请求无 usage 帧）。 */
+export interface ErrorRow {
+  id: string;
+  timestamp: number;
+  application: string;
+  model: string;
+  status: number;
+  stage: ErrorStage;
+  type: ErrorType;
+  message: string;
+  durationMs: number;
+}
+
+/** `GET /v1/usage/logs` 的响应：日志页一次拉取请求与错误两份明细。 */
+export interface LogsResponse {
+  requests: UsageRow[];
+  errors: ErrorRow[];
+}
+
 const BUCKETS = 24;
 
 export function registerUsage(app: Hono, deps: Deps): void {
@@ -125,6 +146,26 @@ export function registerUsage(app: Hono, deps: Deps): void {
     } catch (error) {
       deps.logger.error({ err: error }, 'usage dashboard failed');
       return c.json({ error: 'Failed to fetch usage data' }, 500);
+    }
+  });
+
+  /**
+   * 日志页数据：请求明细与错误明细一并返回。错误来自独立的 ErrorStore
+   * （校验类失败只在这里出现，不进用量统计）；请求明细复用 dashboard 的
+   * 行映射，但允许更大的 limit——日志页是浏览器，不是概览。
+   */
+  app.get('/v1/usage/logs', (c) => {
+    try {
+      const hours = clamp(Number.parseInt(c.req.query('hours') || '24', 10), 1, 720, 24);
+      const limit = clamp(Number.parseInt(c.req.query('limit') || '200', 10), 1, 500, 200);
+      const since = Date.now() - hours * 3_600_000;
+      return c.json({
+        requests: toUsageRows(deps.usage.since(since), limit, deps.pricing),
+        errors: toErrorRows(deps.errors.since(since), limit),
+      } satisfies LogsResponse);
+    } catch (error) {
+      deps.logger.error({ err: error }, 'usage logs failed');
+      return c.json({ error: 'Failed to fetch log data' }, 500);
     }
   });
 }
@@ -278,25 +319,52 @@ export function aggregate(
       avgDuration: row.requests ? Number((durationMs / row.requests / 1000).toFixed(2)) : 0,
       cost: row.cost,
     })),
-    recentLogs: events
-      .slice(-limit)
-      .reverse()
-      .map((e, i) => {
-        const price = rateFor(card, e.model);
-        return {
-          id: `${e.ts}-${i}-${e.model}`,
-          timestamp: e.ts,
-          application: e.application,
-          provider: e.provider,
-          model: e.model,
-          inputTokens: e.inputTokens,
-          outputTokens: e.outputTokens,
-          cacheHitTokens: e.cachedTokens,
-          status: e.status,
-          cost: price ? roundMoney(priceUsage(card, price, e).cost) : null,
-        };
-      }),
+    recentLogs: toUsageRows(events, limit, card),
   };
+}
+
+/** 请求明细行：dashboard 的 recentLogs 与日志页的 requests 共用同一映射。 */
+export function toUsageRows(
+  events: UsageRecord[],
+  limit: number,
+  card: RateCard = EMPTY_RATE_CARD,
+): UsageRow[] {
+  return events
+    .slice(-limit)
+    .reverse()
+    .map((e, i) => {
+      const price = rateFor(card, e.model);
+      return {
+        id: `${e.ts}-${i}-${e.model}`,
+        timestamp: e.ts,
+        application: e.application,
+        provider: e.provider,
+        model: e.model,
+        inputTokens: e.inputTokens,
+        outputTokens: e.outputTokens,
+        cacheHitTokens: e.cachedTokens,
+        status: e.status,
+        cost: price ? roundMoney(priceUsage(card, price, e).cost) : null,
+      };
+    });
+}
+
+/** 错误明细行：最新在前，id 里带上状态码避免同毫秒同模型的碰撞。 */
+function toErrorRows(events: ErrorRecord[], limit: number): ErrorRow[] {
+  return events
+    .slice(-limit)
+    .reverse()
+    .map((e, i) => ({
+      id: `${e.ts}-${i}-${e.model}-${e.status}`,
+      timestamp: e.ts,
+      application: e.application,
+      model: e.model,
+      status: e.status,
+      stage: e.stage,
+      type: e.type,
+      message: e.message,
+      durationMs: e.durationMs,
+    }));
 }
 
 /** 按模型聚合：token、成本、耗时一次算完，成本视图与命中率视图共用同一份分组。 */

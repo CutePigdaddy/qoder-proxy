@@ -1,6 +1,7 @@
 import { loadConfig } from './config.js';
 import { loadEnvFile } from './env.js';
 import { AdmissionGate } from './concurrency/admission.js';
+import { ErrorStore } from './obs/errorStore.js';
 import { applyLogLevel, logger } from './obs/logger.js';
 import { metrics } from './obs/metrics.js';
 import { ModelLimits } from './obs/modelLimits.js';
@@ -67,9 +68,11 @@ async function main(): Promise<void> {
   // Load the on-disk history before serving so the dashboard is not empty for
   // the first 30 seconds after a restart.
   const usage = new UsageStore({ path: config.usageLogPath, logger });
+  const errors = new ErrorStore({ path: config.errorLogPath, logger });
   const limits = new ModelLimits({ path: config.modelLimitsPath, logger });
   await limits.load();
   await usage.load();
+  await errors.load();
   const resolver = new ModelResolver({
     catalog,
     models: config.models.models,
@@ -94,6 +97,7 @@ async function main(): Promise<void> {
     gate,
     quota,
     usage,
+    errors,
     limits,
     pricing,
     startTime: Date.now(),
@@ -114,8 +118,10 @@ async function main(): Promise<void> {
 
   const shutdown = (signal: string): void => {
     logger.info({ signal }, 'shutting down');
-    // Flush pending usage rows / limit edits so a restart loses nothing.
-    void Promise.all([usage.flush(), limits.flush()]).finally(() => server.close(() => process.exit(0)));
+    // Flush pending usage/error rows / limit edits so a restart loses nothing.
+    void Promise.all([usage.flush(), errors.flush(), limits.flush()]).finally(() =>
+      server.close(() => process.exit(0)),
+    );
     setTimeout(() => process.exit(1), 10_000).unref();
   };
 

@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   BusyError,
+  ClientGoneError,
+  classifyFailure,
   CredentialRejectedError,
   HttpError,
   mapUpstreamFailure,
+  QuotaExhaustedError,
 } from '../../src/util/errors.js';
 
 describe('mapUpstreamFailure', () => {
@@ -106,5 +109,31 @@ describe('BusyError', () => {
     const error = new BusyError(7);
     expect(error.status).toBe(429);
     expect(error.retryAfter).toBe(7);
+  });
+});
+
+describe('classifyFailure', () => {
+  it('reads the error type before the status, because 429 carries two meanings', () => {
+    expect(classifyFailure(new QuotaExhaustedError('out of credits'), 429)).toBe('quota');
+    expect(classifyFailure(new HttpError(429, 'Upstream rate limited'), 429)).toBe('rate-limit');
+    expect(classifyFailure(new BusyError(3), 429)).toBe('busy');
+  });
+
+  it('separates "client hung up" from "our deadline fired" while queued', () => {
+    // 499/504 的分叉点：同一个 ClientGoneError，按最终状态区分谁先放手
+    expect(classifyFailure(new ClientGoneError(), 499)).toBe('client-gone');
+    expect(classifyFailure(new ClientGoneError(), 504)).toBe('timeout');
+  });
+
+  it('maps plain statuses when no error object is available', () => {
+    expect(classifyFailure(undefined, 400)).toBe('invalid');
+    expect(classifyFailure(undefined, 401)).toBe('upstream');
+    expect(classifyFailure(undefined, 503)).toBe('busy');
+    expect(classifyFailure(undefined, 502)).toBe('upstream');
+    expect(classifyFailure('boom', 500)).toBe('upstream');
+  });
+
+  it('tags credential rejections distinctly from generic 401s', () => {
+    expect(classifyFailure(new CredentialRejectedError('rejected'), 401)).toBe('credential');
   });
 });
