@@ -156,6 +156,24 @@ export interface ModelUsage {
   peakPromptTokens: number;
 }
 
+export type ProbeOutcome = 'ok' | 'no-capacity' | 'timeout' | 'credential' | 'error';
+export type ProbeState = 'ok' | 'degraded' | 'down' | 'unknown';
+
+/** 最近一个窗口内的实测可用性；null = 探测未启用或还没有样本 */
+export interface ProbeSummary {
+  windowMs: number;
+  samples: number;
+  /** 成功占比 0-100 */
+  successRate: number;
+  /** 成功样本的平均首字耗时（毫秒） */
+  avgLatencyMs: number;
+  lastOutcome: ProbeOutcome | null;
+  lastProbeAt: number | null;
+  state: ProbeState;
+  /** 窗口内各结果计数，用来说明「为什么不可用」 */
+  outcomes: Record<ProbeOutcome, number>;
+}
+
 /** /v1/models 的一行，字段与后端 snake_case 对齐 */
 export interface ModelEntry {
   id: string;
@@ -173,6 +191,8 @@ export interface ModelEntry {
   input_limit: number | null;
   /** 公开人民币价目；null = 价目表里没有，面板显示「未定价」 */
   rate: RateView | null;
+  /** 最近窗口的实测可用性（30s 一次免费通道探测，不扣 credits） */
+  probe: ProbeSummary | null;
   usage: ModelUsage | null;
 }
 

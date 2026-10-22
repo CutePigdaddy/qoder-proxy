@@ -92,6 +92,8 @@ export function registerModels(app: Hono, deps: Deps): void {
           input_limit: deps.limits.get(entry.displayName),
           // 公开人民币价目（元 / 百万 tokens）；null = 价目表里没有，面板显示「未定价」
           rate: rate ? rateView(rate) : null,
+          // 最近 5 分钟实测可用性（每 30s 探一次）。null = 探测关闭或还没有样本
+          probe: deps.probe?.summary(entry.displayName) ?? null,
           usage: usage.get(entry.displayName) ?? null,
         };
       }),

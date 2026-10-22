@@ -227,6 +227,33 @@ function costSummary(logs) {
   };
 }
 
+/** 演示用的可用性：三种状态 + 一个无样本，保证一屏里能看到所有分支 */
+function probeOf(id) {
+  const demo = [
+    { rate: 100, ok: 10, noCapacity: 0 },
+    { rate: 90, ok: 9, noCapacity: 1 },
+    { rate: 40, ok: 4, noCapacity: 6 },
+    { rate: null },
+  ][[...id].reduce((n, ch) => n + ch.charCodeAt(0), 0) % 4];
+  if (demo.rate === null) return null;
+  return {
+    windowMs: 300_000,
+    samples: 10,
+    successRate: demo.rate,
+    avgLatencyMs: 480 + (demo.ok % 5) * 90,
+    lastOutcome: demo.rate >= 95 ? 'ok' : 'no-capacity',
+    lastProbeAt: Date.now() - 12_000,
+    state: demo.rate >= 95 ? 'ok' : demo.rate >= 60 ? 'degraded' : 'down',
+    outcomes: {
+      ok: demo.ok,
+      'no-capacity': demo.noCapacity,
+      timeout: 0,
+      credential: 0,
+      error: 0,
+    },
+  };
+}
+
 /**
  * 模型目录 mock：字段与 /v1/models 的真实响应一致，值取自线上上游
  * （包括 3 个「只在配置里」的模型，用来检查告警条）。
@@ -250,6 +277,7 @@ function models() {
     availability: opts.availability ?? 'live',
     input_limit: opts.inputLimit ?? null,
     rate: rateView(rateOf(id)),
+    probe: probeOf(id),
     usage: opts.usage ?? null,
   });
 

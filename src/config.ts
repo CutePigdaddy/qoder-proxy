@@ -40,6 +40,14 @@ const EnvSchema = z.object({
   // conversation and runs ~144 SHA-256 passes per usage event. Forensics only,
   // so it stays off unless someone is actively chasing a cache regression.
   CACHE_DIAGNOSTICS: z.enum(['0', '1']).default('0'),
+  // 模型可用性探测：用免费通道（FREE_INPUT，不扣 credits）发最小请求，实测
+  // 「现在能不能用」。失败天然不扣费，成功也不计入 credits，所以这是唯一能
+  // 持续采样而不烧额度的办法。下限 5s 是保护：再短就变成自己在压上游。
+  PROBE_ENABLED: z.enum(['0', '1']).default('1'),
+  PROBE_INTERVAL_MS: z.coerce.number().int().min(5_000).default(30_000),
+  PROBE_WINDOW_MS: z.coerce.number().int().min(60_000).default(300_000),
+  // 逗号分隔的模型白名单（显示名或 id）；留空 = 目录里的全部模型
+  PROBE_MODELS: z.string().default(''),
 });
 
 export interface ModelMapping {
@@ -78,6 +86,13 @@ export interface AppConfig {
   tokenMarkerMode: 'move' | 'strip' | 'keep';
   cacheDiagnostics: boolean;
   pricingPath: string;
+  /** 可用性探测器开关与采样参数 */
+  probe: {
+    enabled: boolean;
+    intervalMs: number;
+    windowMs: number;
+    models: string[];
+  };
   models: ModelsConfig;
 }
 
@@ -108,6 +123,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     tokenMarkerMode: e.TOKEN_MARKER_MODE,
     cacheDiagnostics: e.CACHE_DIAGNOSTICS === '1',
     pricingPath: e.PRICING_CONFIG_PATH,
+    probe: {
+      enabled: e.PROBE_ENABLED === '1',
+      intervalMs: e.PROBE_INTERVAL_MS,
+      windowMs: e.PROBE_WINDOW_MS,
+      models: e.PROBE_MODELS.split(',')
+        .map((name) => name.trim())
+        .filter((name) => name.length > 0),
+    },
     models: loadModelsConfig(e.MODELS_CONFIG_PATH, e.MODEL_FALLBACK),
   };
 }

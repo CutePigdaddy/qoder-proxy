@@ -186,6 +186,7 @@ function cacheDiagnostics(
  */
 export class QoderClient {
   private readonly retryMaxWaitMs: number;
+  private readonly maxBusyRetries: number;
 
   constructor(
     private readonly opts: {
@@ -194,11 +195,17 @@ export class QoderClient {
       tokenMarkerMode?: TokenMarkerMode;
       /** Upper bound for a single back-off wait, in milliseconds. */
       retryMaxWaitMs?: number;
+      /**
+       * 内部最多重试几次瞬时失败。可用性探测传 0：它要的就是「此刻」的答案，
+       * 重试既会拉长一次探测，也会把一次失败抹成成功，指标就失真了。
+       */
+      maxBusyRetries?: number;
       /** Emit the prompt-cache hash grids on the usage event (`CACHE_DIAGNOSTICS=1`). */
       cacheDiagnostics?: boolean;
     },
   ) {
     this.retryMaxWaitMs = opts.retryMaxWaitMs ?? DEFAULT_RETRY_MAX_WAIT_MS;
+    this.maxBusyRetries = opts.maxBusyRetries ?? MAX_BUSY_RETRIES;
   }
 
   /**
@@ -241,7 +248,7 @@ export class QoderClient {
           continue;
         }
 
-        if (isTransientBusy(error) && busyRetries < MAX_BUSY_RETRIES) {
+        if (isTransientBusy(error) && busyRetries < this.maxBusyRetries) {
           busyRetries += 1;
           const waitMs = Math.min((error.retryAfter ?? busyRetries * 2) * 1000, this.retryMaxWaitMs);
           logger.warn(

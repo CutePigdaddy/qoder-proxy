@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { ModelEntry } from '../types';
+import type { ModelEntry, ProbeSummary } from '../types';
 import { compact, hitTone, money, percent } from '../utils/format';
 
 type SortKey = 'default' | 'context' | 'price' | 'usage';
@@ -206,6 +206,46 @@ const LimitCell: React.FC<{
  * 模型目录：一屏回答「有哪些、多大上下文、什么价、最近用没用」。
  * 与请求日志同一套表格语言（细边、等宽数字、右对齐），避免两种表格风格并存。
  */
+const PROBE_SMALL_SAMPLE = 3;
+
+/**
+ * 可用性单元格：主数字是窗口内的成功率，副行是样本数。
+ * 样本太少时不上色——一次探测失败就能把 1/1 拉成 0%，那是噪声不是趋势。
+ */
+function ProbeCell({ probe }: { probe: ProbeSummary | null }) {
+  if (!probe) {
+    return (
+      <span className="muted" title="探测未启用，或还没有采到样本">
+        —
+      </span>
+    );
+  }
+  const thin = probe.samples < PROBE_SMALL_SAMPLE;
+  const tone = thin
+    ? 'neutral'
+    : probe.state === 'ok'
+      ? 'good'
+      : probe.state === 'degraded'
+        ? 'fair'
+        : 'poor';
+  const o = probe.outcomes;
+  const detail = [
+    `窗口 ${Math.round(probe.windowMs / 1000)}s，探测 ${probe.samples} 次`,
+    `成功 ${o.ok} · 无资源 ${o['no-capacity']} · 超时 ${o.timeout} · 错误 ${o.error}`,
+    o.credential > 0 ? `凭据被拒 ${o.credential}` : '',
+    probe.avgLatencyMs > 0 ? `成功平均 ${probe.avgLatencyMs}ms` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  return (
+    <div className="probe-cell" title={detail}>
+      <span className={`rate tone-${tone}`}>{probe.successRate}%</span>
+      <span className="probe-sub">{probe.samples} 次</span>
+    </div>
+  );
+}
+
 const ModelTable: React.FC<Props> = ({ models, loading, refreshing, error, hours, onRefresh, onSaveLimit }) => {
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<SortKey>('default');
@@ -295,6 +335,12 @@ const ModelTable: React.FC<Props> = ({ models, loading, refreshing, error, hours
               <th scope="col" title="三段依次为：新增输入 / 缓存命中 / 输出 的单价；悬停可见阶梯、峰谷与来源">
                 公开价（元/百万 tokens）
               </th>
+              <th
+                scope="col"
+                title="最近 5 分钟实测：每 30 秒用免费通道探一次（成功与失败都不扣 credits），成功次数占比"
+              >
+                可用性
+              </th>
               <th scope="col">状态</th>
               <th scope="col" title="网关自己的闸门：上游并不按 token 数拦截">
                 网关上限
@@ -307,13 +353,13 @@ const ModelTable: React.FC<Props> = ({ models, loading, refreshing, error, hours
           <tbody>
             {loading && models.length === 0 ? (
               <tr>
-                <td colSpan={7} className="table-empty">
+                <td colSpan={8} className="table-empty">
                   正在读取模型目录…
                 </td>
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={7} className="table-empty">
+                <td colSpan={8} className="table-empty">
                   没有匹配的模型
                 </td>
               </tr>
@@ -371,6 +417,9 @@ const ModelTable: React.FC<Props> = ({ models, loading, refreshing, error, hours
                       ) : (
                         <span className={entry.pricing.free ? undefined : 'muted'}>{priceText(entry)}</span>
                       )}
+                    </td>
+                    <td>
+                      <ProbeCell probe={entry.probe} />
                     </td>
                     <td>
                       <div className="badge-row">

@@ -611,6 +611,20 @@ button {
   font-weight: 600;
 }
 
+/* 可用性单元格：主数字 + 样本数，右对齐以便与同列的 num 对齐 */
+.probe-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  line-height: 1.25;
+}
+
+.probe-sub {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 /* 失败请求：0 token 的行需要一个解释，否则看起来像数据缺失 */
 .fail-dot {
   display: inline-block;

@@ -1,6 +1,7 @@
 import { loadConfig } from './config.js';
 import { loadEnvFile } from './env.js';
 import { AdmissionGate } from './concurrency/admission.js';
+import { AvailabilityProber } from './obs/availability.js';
 import { ErrorStore } from './obs/errorStore.js';
 import { applyLogLevel, logger } from './obs/logger.js';
 import { metrics } from './obs/metrics.js';
@@ -82,6 +83,32 @@ async function main(): Promise<void> {
   // 价目表只读一次：面板上的成本是「按当前价目折算」的口径，改价后重启即可
   const pricing = loadRateCard(config.pricingPath, logger);
 
+  // 探测器单独一个 client，maxBusyRetries=0：探测要的是「此刻」的答案，
+  // 内部重试会把一次失败抹成成功，也会把周期拉长到秒级。
+  const probe = config.probe.enabled
+    ? new AvailabilityProber({
+        client: new QoderClient({
+          endpoints,
+          credentials,
+          tokenMarkerMode: config.tokenMarkerMode,
+          retryMaxWaitMs: config.retryMaxWaitMs,
+          maxBusyRetries: 0,
+          cacheDiagnostics: false,
+        }),
+        resolver,
+        logger,
+        intervalMs: config.probe.intervalMs,
+        windowMs: config.probe.windowMs,
+        models: config.probe.models,
+      })
+    : null;
+  if (probe) {
+    logger.info(
+      { intervalMs: config.probe.intervalMs, windowMs: config.probe.windowMs, models: config.probe.models },
+      'availability probing enabled (free channel, no credits)',
+    );
+  }
+
   const updateGauges = (): void => {
     metrics.concurrency.set(gate.inFlight);
     metrics.queueDepth.set(gate.depth);
@@ -100,6 +127,7 @@ async function main(): Promise<void> {
     errors,
     limits,
     pricing,
+    probe,
     startTime: Date.now(),
     updateGauges,
   });
@@ -116,8 +144,12 @@ async function main(): Promise<void> {
     );
   });
 
+  // 首轮延迟内置在 start() 里：让启动时的模型目录拉取先完成
+  probe?.start();
+
   const shutdown = (signal: string): void => {
     logger.info({ signal }, 'shutting down');
+    probe?.stop();
     // Flush pending usage/error rows / limit edits so a restart loses nothing.
     void Promise.all([usage.flush(), errors.flush(), limits.flush()]).finally(() =>
       server.close(() => process.exit(0)),

@@ -191,6 +191,8 @@ export function createHarness(options: HarnessOptions = {}): Harness {
     // 真实价目表：目录页与成本断言都基于 config/pricing.json 的实际内容，
     // 价目改了测试会跟着失败，这正是我们要的（避免测试与线上价目脱节）。
     pricing: loadRateCard(config.pricingPath),
+    // 不启探测：单元/集成测试不该往外发请求，`probe: null` 对应「探测关闭」。
+    probe: null,
     startTime: Date.now(),
     updateGauges: () => undefined,
   };

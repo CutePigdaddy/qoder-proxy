@@ -6,6 +6,7 @@ import type { QoderClient } from '../qoder/client.js';
 import type { CredentialStore } from '../qoder/credentialStore.js';
 import type { ModelCatalog } from '../qoder/modelCatalog.js';
 import type { ModelLimits } from '../obs/modelLimits.js';
+import type { AvailabilityProber } from '../obs/availability.js';
 import type { ErrorStore } from '../obs/errorStore.js';
 import type { RateCard } from '../obs/pricing.js';
 import type { QuotaService } from '../qoder/quota.js';
@@ -28,6 +29,8 @@ export interface Deps {
   errors: ErrorStore;
   /** 公开人民币价目表；成本估算的唯一价格来源 */
   pricing: RateCard;
+  /** 模型可用性探测器；PROBE_ENABLED=0 时为 null，面板显示「—」 */
+  probe: AvailabilityProber | null;
   startTime: number;
   /** Push current concurrency/queue values into the exported gauges. */
   updateGauges: () => void;
