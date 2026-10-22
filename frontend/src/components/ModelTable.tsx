@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ModelEntry } from '../types';
-import { compact, hitTone, percent } from '../utils/format';
+import { compact, hitTone, money, percent } from '../utils/format';
 
 type SortKey = 'default' | 'context' | 'price' | 'usage';
 
@@ -22,10 +22,36 @@ const SORTS: Array<{ key: SortKey; label: string }> = [
   { key: 'usage', label: '用量' },
 ];
 
-/** 公开人民币价目（元/百万 tokens）；免费模型单独用文案。 */
+/**
+ * 公开人民币价目（元/百万 tokens）分三段直接可读：`输入 / 缓存 / 输出`，
+ * 阶梯、峰谷规则与来源放进 title，列表格不至于被一列长数字撑爆。
+ *
+ * 注意这里**不能**回退到 `pricing.factor`：那是 Qoder 自己的计费系数（0.2、0.5），
+ * 不是人民币单价，混进「公开价」列会让人误以为一次请求只要几毛钱。
+ */
 function priceText(entry: ModelEntry): string {
   if (entry.pricing.free) return '免费';
-  return entry.pricing.factor === null ? '—' : String(entry.pricing.factor);
+  return '—';
+}
+
+function priceTitle(entry: ModelEntry): string {
+  const rate = entry.rate;
+  if (!rate) {
+    return entry.pricing.free ? '上游标记为免费模型' : '价目表里没有这个模型，成本未计入';
+  }
+  const lines = [
+    `新增输入 ¥${money(rate.input)} / 百万 tokens`,
+    `命中缓存 ¥${money(rate.cachedInput)} / 百万 tokens`,
+    `输出 ¥${money(rate.output)} / 百万 tokens`,
+  ];
+  if (rate.tiers > 1) lines.push(`分 ${rate.tiers} 档阶梯价，按单次请求输入总量选档`);
+  if (rate.peak) {
+    lines.push(`${rate.peak.windows.join('、')}（工作日）单价 ×${rate.peak.multiplier}`);
+  }
+  lines.push(`来源：${rate.source?.label ?? '厂商公开价目'}`);
+  if (rate.confidence === 'estimate') lines.push('注意：该价目为估算值');
+  if (rate.note) lines.push(rate.note);
+  return lines.join('\n');
 }
 
 function byContextNewest(a: ModelEntry, b: ModelEntry): number {
@@ -34,10 +60,14 @@ function byContextNewest(a: ModelEntry, b: ModelEntry): number {
   return b.context_window - a.context_window;
 }
 
+/** 按输入单价升序；未定价的沉到最后（与成本面板的排序口径一致）。 */
 function byPriceCheapest(a: ModelEntry, b: ModelEntry): number {
-  if (a.pricing.factor === null) return 1;
-  if (b.pricing.factor === null) return -1;
-  return a.pricing.factor - b.pricing.factor;
+  const left = a.rate?.input ?? null;
+  const right = b.rate?.input ?? null;
+  if (left === null && right === null) return a.id.localeCompare(b.id);
+  if (left === null) return 1;
+  if (right === null) return -1;
+  return left - right;
 }
 
 function statusBadges(entry: ModelEntry): React.ReactNode[] {
@@ -51,7 +81,13 @@ function statusBadges(entry: ModelEntry): React.ReactNode[] {
   }
   if (entry.pricing.free) {
     badges.push(
-      <span className="badge badge-good" key="free">
+      // 「免费」说的是 Qoder 侧的计费系数为 0（套餐内不扣额度），
+      // 与「公开价」列的厂商单价不是同一件事：成本面板仍按厂商价估算。
+      <span
+        className="badge badge-good"
+        key="free"
+        title="Qoder 侧计费系数为 0，套餐内不扣额度；公开价列是厂商单价，仅用于成本估算"
+      >
         免费
       </span>,
     );
@@ -256,7 +292,9 @@ const ModelTable: React.FC<Props> = ({ models, loading, refreshing, error, hours
                 上下文
               </th>
               <th scope="col">能力</th>
-              <th scope="col">公开价（元/百万 tokens）</th>
+              <th scope="col" title="三段依次为：新增输入 / 缓存命中 / 输出 的单价；悬停可见阶梯、峰谷与来源">
+                公开价（元/百万 tokens）
+              </th>
               <th scope="col">状态</th>
               <th scope="col" title="网关自己的闸门：上游并不按 token 数拦截">
                 网关上限
@@ -312,8 +350,27 @@ const ModelTable: React.FC<Props> = ({ models, loading, refreshing, error, hours
                         )}
                       </div>
                     </td>
-                    <td className="mono">
-                      {priceText(entry)}
+                    <td className="mono" title={priceTitle(entry)}>
+                      {entry.rate ? (
+                        <>
+                          <span className="price-seg">
+                            <span className="price-key">输入</span>
+                            {money(entry.rate.input)}
+                          </span>
+                          <span className="price-seg">
+                            <span className="price-key">缓存</span>
+                            {money(entry.rate.cachedInput)}
+                          </span>
+                          <span className="price-seg">
+                            <span className="price-key">输出</span>
+                            {money(entry.rate.output)}
+                          </span>
+                          {entry.rate.peak && <span className="price-flag">峰谷</span>}
+                          {entry.rate.tiers > 1 && <span className="price-flag">阶梯</span>}
+                        </>
+                      ) : (
+                        <span className={entry.pricing.free ? undefined : 'muted'}>{priceText(entry)}</span>
+                      )}
                     </td>
                     <td>
                       <div className="badge-row">

@@ -132,6 +132,8 @@ export interface ModelEntry {
   availability: ModelAvailability;
   /** 网关侧输入上限；null 表示不限制 */
   input_limit: number | null;
+  /** 公开人民币价目；null = 价目表里没有，面板显示「未定价」 */
+  rate: RateView | null;
   usage: ModelUsage | null;
 }
 

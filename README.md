@@ -194,10 +194,25 @@ curl -s https://你的域名/v1/chat/completions \
 | 方法   | 路径                     | 鉴权 | 说明                       |
 | ---- | ---------------------- | -- | ------------------------ |
 | POST | `/v1/chat/completions` | ✅  | 对话，支持 `stream` 与 `tools` |
-| GET  | `/v1/models`           | ✅  | 模型目录                     |
+| GET  | `/v1/models`           | ✅  | 模型目录（含公开价目与窗口内用量）        |
+| GET  | `/v1/usage/dashboard`  | ✅  | 仪表盘数据（含成本汇总，`?hours=` 选窗口） |
+| PUT  | `/v1/models/limits`    | ✅  | 设置/清除网关侧的每模型输入上限          |
 | GET  | `/v1/quota`            | ✅  | 上游账号剩余额度（默认缓存 60s）       |
 | GET  | `/health`              | —  | 存活探测，不触上游、不烧额度           |
 | GET  | `/metrics`             | —  | Prometheus 文本指标（仅 compose 内网可抓取） |
+
+### 成本估算（`/v1/usage/dashboard` 的 `cost` 字段）
+
+仪表盘上的人民币成本**不是**上游给的，而是拿请求日志里的 token 数乘以 `config/pricing.json` 的公开价目算出来的：
+
+- **三条计费项**：新增输入（未命中缓存）、命中缓存的输入、输出。缓存命中价通常只有输入价的 1–20%，所以命中率直接决定成本。
+- **阶梯价**（Qwen3.7-Flash 等）：按**单次请求**的输入总量（新增 + 命中）选档，整个请求按该档结算，不逐段累进。
+- **峰谷价**（DeepSeek）：表里存闲时价，工作日 09:00–12:00、14:00–18:00（**北京时间**，用 `Intl.DateTimeFormat` 判定，与容器时区无关）三项单价 ×2。
+- **未定价模型不计入总额**：价目表里没有的模型，其请求计入 `unpriced.requests`，面板会显式说明「成本未计入」，而不是按 0 编一个数。
+- 改价只需编辑 `config/pricing.json`（compose 里是只读挂载）后 `docker compose restart qoder-proxy`，**不用重建镜像**；格式写错只丢那一条并打 warning，不会让整个面板归零。
+- 改完跑 `npm run check:pricing` 自检：会列出配置里每个模型的三条单价、阶梯档数、峰谷窗口，并用固定时间点验证峰时确实更贵、阶梯确实换档。缺价目的模型会标 ✗ 并以非零码退出。
+
+`rate` 字段同时出现在 `/v1/models` 的每一行，面板据此显示「公开价（元/百万 tokens）」。上游的 `pricing.factor` 是 Qoder 自己的计费系数，**不是**人民币单价，两者不要混看。
 
 ### 余量检测 `GET /v1/quota`
 
@@ -248,6 +263,7 @@ curl -s https://$DOMAIN/v1/quota -H "Authorization: Bearer $PROXY_API_KEY" | jq
 | `BODY_LIMIT`         | `10485760`           | 请求体上限（10 MB）                            |
 | `MODEL_FALLBACK`     | `auto`               | 未知名模型的回退档位                              |
 | `MODELS_CONFIG_PATH` | `config/models.json` | 模型映射表（显示名 → wire key）+ 别名表           |
+| `PRICING_CONFIG_PATH` | `config/pricing.json` | 公开人民币价目表，仪表盘据此折算成本；改价只改这个文件 |
 | `TOKEN_CACHE_PATH`   | `.cache/tokens.json` | jt/jrt 缓存（可丢，重启用 PAT 重换）                |
 | `QODER_QUOTA_TTL_MS` | `60000`              | `/v1/quota` 缓存时长，`0` 表示每次都回源            |
 | `LOG_LEVEL`          | `info`               | pino 级别                                 |

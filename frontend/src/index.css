@@ -385,7 +385,13 @@ button {
   display: block;
   height: 100%;
   border-radius: 3px;
+  background: var(--accent);
   transition: width 0.45s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* 成本占比条：这里的长度只表示分布，不代表好坏，所以不上红/绿 */
+.meter-fill.is-unpriced {
+  background: var(--border-strong);
 }
 
 .tone-good {
@@ -810,6 +816,33 @@ button {
   margin-right: 7px;
   font-size: 11px;
   color: var(--muted);
+}
+
+/* 「峰谷 / 阶梯」这类计价规则标记：不加底色，只用小字提示，
+   免得一排灰色方块把价格本身挤成次要信息 */
+.price-flag {
+  margin-left: 7px;
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+/* 公开价三段式：输入 / 缓存 / 输出。标签用小字弱化，数字才是主体；
+   不用斜杠分隔是因为三个数字连排时，标签本身就是最好的分隔符 */
+.price-seg {
+  margin-right: 12px;
+  white-space: nowrap;
+}
+
+.price-seg:last-of-type {
+  margin-right: 0;
+}
+
+.price-key {
+  margin-right: 4px;
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 400;
 }
 
 /* 列宽按内容分配，避免「能力」与「价格」之间留出一大片空白 */

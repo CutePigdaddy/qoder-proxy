@@ -16,6 +16,17 @@ export function percent(n: number, digits = 1): string {
   return Number.isFinite(n) ? `${n.toFixed(digits)}%` : '—';
 }
 
+/**
+ * 单价：最多两位小数，去掉无意义的尾零（12.00 → 12，0.80 → 0.8）。
+ * 价目表里的数从 0.02 到 100 都有，固定两位会让「0.02」和「0.015」读起来一样，
+ * 固定零位又会把 0.8 抹成 1，所以按实际位数裁。
+ */
+export function money(n: number): string {
+  if (!Number.isFinite(n)) return '—';
+  const fixed = n.toFixed(2);
+  return fixed.replace(/0+$/, '').replace(/\.$/, '');
+}
+
 export function clock(ts: number): string {
   const d = new Date(ts);
   const pad = (v: number) => String(v).padStart(2, '0');

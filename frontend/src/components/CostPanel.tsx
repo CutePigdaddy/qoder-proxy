@@ -30,7 +30,6 @@ const CostPanel: React.FC<Props> = ({ cost }) => {
   const ratio = cost.total > 0 ? cost.cacheSavings / cost.total : 0;
   const tone: Tone = cost.total <= 0 ? 'neutral' : ratio > 0.5 ? 'good' : ratio > 0.2 ? 'fair' : 'poor';
   const thin = samples < SMALL_SAMPLE;
-  const heroTone: Tone = thin ? 'neutral' : tone;
 
   const unpriced = cost.unpriced;
   const unpricedLabel =
@@ -52,7 +51,8 @@ const CostPanel: React.FC<Props> = ({ cost }) => {
 
       <div className="cache-body">
         <div className="cache-hero">
-          <span className={`cache-number tone-${heroTone}`}>¥ {grouped(cost.total)}</span>
+          {/* 总额是事实、不是好坏，所以不上语义色；有语义的只有下面那行「缓存抵扣」 */}
+          <span className="cache-number">¥ {grouped(cost.total)}</span>
           <dl className="cache-facts">
             <div>
               <dt>若缓存全部未命中</dt>
@@ -99,25 +99,26 @@ const CostPanel: React.FC<Props> = ({ cost }) => {
 
       <div className="model-grid">
         {cost.byModel.map((row) => {
-          const shareTone: Tone =
-            thin || row.cost <= 0 ? 'neutral' : row.share > 30 ? 'good' : row.share > 10 ? 'fair' : 'poor';
+          const priced = row.rate !== null;
           return (
             <div className="model-row" key={row.model}>
               <div className="model-id">
                 <span className="model-name">{row.model}</span>
                 <span className="model-sub">
                   {row.requests} 次请求
-                  {row.rate ? '' : ' · 未定价'}
+                  {priced ? '' : ' · 未定价'}
                 </span>
               </div>
               <div className="model-meter">
+                {/* 占比只是分布，不是质量问题：统一用 accent 填充，
+                    否则「最烧钱的模型」会被画成绿色、「花得少的」被标红，读起来正好相反 */}
                 <span
-                  className={`meter-fill tone-${shareTone}`}
+                  className={`meter-fill${priced ? '' : ' is-unpriced'}`}
                   style={{ width: `${Math.min(row.share, 100)}%` }}
                 />
               </div>
               <div className="num mono">
-                <span className={`tone-${shareTone}`}>¥ {grouped(row.cost)}</span>
+                <span className={priced ? undefined : 'muted'}>¥ {grouped(row.cost)}</span>
                 {/* blended 是「这个模型每百万 tokens 实际花了多少」，与是否有价目无关 */}
                 {row.blended > 0 && <span className="muted"> ({grouped(row.blended)}/M)</span>}
               </div>

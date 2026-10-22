@@ -15,6 +15,7 @@
     "probe": "tsx scripts/signature-probe.ts",
     "probe:usage": "tsx scripts/usage-probe.ts",
     "matrix": "tsx scripts/model-matrix.ts",
+    "check:pricing": "tsx scripts/check-pricing.ts",
     "frontend": "cd frontend && npm run dev",
     "frontend:build": "cd frontend && npm run build",
     "dev:both": "concurrently \"npm run dev\" \"npm run frontend\""

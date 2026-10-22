@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { loadRateCard, normaliseModel, pickTier, rateFor, rateView, roundMoney, isPeak } from '../../src/obs/pricing.js';
+import { loadRateCard, normaliseModel, pickTier, priceUsage, rateFor, rateView, roundMoney, isPeak } from '../../src/obs/pricing.js';
 
 describe('pricing', () => {
   const tmpDir = '/tmp/qoder-pricing-test';
@@ -78,7 +78,7 @@ describe('pricing', () => {
       const card = loadRateCard('config/pricing.json');
       const rate = rateFor(card, 'Qwen3.8-Flash')!;
       const usage = { ts: Date.now(), inputTokens: 1000, cachedTokens: 0, outputTokens: 500 };
-      const breakdown = require('../../src/obs/pricing.js').priceUsage(card, rate, usage);
+      const breakdown = priceUsage(card, rate, usage);
       expect(breakdown.cost).toBeCloseTo((1000 * 0.8 + 500 * 2.7) / 1_000_000, 6);
     });
 
@@ -89,7 +89,7 @@ describe('pricing', () => {
 
       const peakTs = Date.UTC(2026, 9, 22, 2, 0, 0); // 2026-10-22 10:00 Beijing
       const usage = { ts: peakTs, inputTokens: 1000, cachedTokens: 0, outputTokens: 500 };
-      const breakdown = require('../../src/obs/pricing.js').priceUsage(card, rate, usage);
+      const breakdown = priceUsage(card, rate, usage);
       expect(breakdown.peak).toBe(true);
       // Should be double the base rate
       const expectedBase = (1000 * 4.5 + 500 * 13.5) / 1_000_000;

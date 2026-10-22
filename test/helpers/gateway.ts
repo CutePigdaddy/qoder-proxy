@@ -6,6 +6,7 @@ import { AdmissionGate } from '../../src/concurrency/admission.js';
 import type { AppConfig } from '../../src/config.js';
 import type { IREvent, IRRequest } from '../../src/ir/types.js';
 import { ModelLimits } from '../../src/obs/modelLimits.js';
+import { loadRateCard } from '../../src/obs/pricing.js';
 import { UsageStore } from '../../src/obs/usageStore.js';
 import type { ModelListEntry } from '../../src/openai/modelResolver.js';
 import type { QoderClient, ResolvedModel } from '../../src/qoder/client.js';
@@ -46,6 +47,7 @@ export function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     tokenMarkerMode: 'move',
     cacheDiagnostics: false,
     models: { models: [], aliases: {}, fallback: 'auto' },
+    pricingPath: 'config/pricing.json',
     ...overrides,
   };
 }
@@ -181,6 +183,9 @@ export function createHarness(options: HarnessOptions = {}): Harness {
     usage: new UsageStore({
       path: join(tmpdir(), `qoder-usage-${process.pid}-${++harnessSeq}.jsonl`),
     }),
+    // 真实价目表：目录页与成本断言都基于 config/pricing.json 的实际内容，
+    // 价目改了测试会跟着失败，这正是我们要的（避免测试与线上价目脱节）。
+    pricing: loadRateCard(config.pricingPath),
     startTime: Date.now(),
     updateGauges: () => undefined,
   };
