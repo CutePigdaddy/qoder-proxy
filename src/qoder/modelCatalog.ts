@@ -37,6 +37,13 @@ export interface CatalogEntry {
   originalPriceFactor?: number | null;
   isFree?: boolean;
   isDefault?: boolean;
+  /**
+   * 上游目录里 `enable` 为 false：表示「在这个账号的客户端里默认不显示」，
+   * **不代表调用会被拒**。实测（2026-10-22，Teams 账号）这类模型同样能正常
+   * 调用，因此不能据此丢弃条目——否则面板会把一堆可用模型标成「仅配置」。
+   * 保留下来供 UI 区分「官方默认展示」与「需手动指定」。
+   */
+  enabled?: boolean;
   promotion?: CatalogPromotion | null;
 }
 
@@ -162,7 +169,9 @@ function toEntry(raw: unknown): CatalogEntry | null {
   const record = asRecord(raw);
   if (!record) return null;
 
-  if (record.enable === false) return null;
+  // `enable:false` 只是「客户端下拉里默认不显示」，不是「不可调用」。
+  // 丢掉它们会让目录只剩一条，并把真正可用的模型误标为「仅配置」。
+  const enabled = record.enable !== false;
 
   const keyCandidate = record.key ?? record.model ?? record.model_key ?? record.id ?? record.name;
   if (typeof keyCandidate !== 'string' || !keyCandidate.trim()) return null;
@@ -187,6 +196,7 @@ function toEntry(raw: unknown): CatalogEntry | null {
     originalPriceFactor: asNumber(record.original_price_factor ?? record.originalPriceFactor),
     isFree: Boolean(record.is_free ?? record.isFree ?? false),
     isDefault: Boolean(record.is_default ?? record.isDefault ?? false),
+    enabled,
     promotion: toPromotion(record.promotion),
   };
 }

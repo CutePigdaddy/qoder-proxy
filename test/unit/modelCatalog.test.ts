@@ -35,7 +35,7 @@ const liveShape = {
 describe('parseCatalogPayload', () => {
   it('reads the live `chat` envelope', () => {
     const entries = parseCatalogPayload(liveShape);
-    expect(entries.map((entry) => entry.key)).toEqual(['auto', 'qmodel_38max']);
+    expect(entries.map((entry) => entry.key)).toEqual(['auto', 'qmodel_38max', 'retired-model']);
   });
 
   it('preserves display names and reasoning flags', () => {
@@ -44,9 +44,15 @@ describe('parseCatalogPayload', () => {
     expect(auto?.isReasoning).toBe(true);
   });
 
-  it('skips disabled models', () => {
-    const keys = parseCatalogPayload(liveShape).map((entry) => entry.key);
-    expect(keys).not.toContain('retired-model');
+  it('keeps disabled models but marks them as not enabled', () => {
+    // 2026-10-22 实测推翻了旧假设：`enable:false` 只表示「客户端下拉里默认不
+    // 显示」，这些模型同样能调用（Teams 账号下 10 个 enable:false 的模型全部
+    // 返回 200）。丢弃它们会把可用模型误标成「仅配置」。
+    const entries = parseCatalogPayload(liveShape);
+    const retired = entries.find((entry) => entry.key === 'retired-model');
+    expect(retired).toBeDefined();
+    expect(retired?.enabled).toBe(false);
+    expect(entries.find((entry) => entry.key === 'auto')?.enabled).toBe(true);
   });
 
   it('still accepts the other envelope spellings', () => {
