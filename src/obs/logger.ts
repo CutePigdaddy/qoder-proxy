@@ -5,7 +5,7 @@ import pino from 'pino';
 // configuration once it exists (see src/index.ts).
 const level = process.env.LOG_LEVEL ?? 'info';
 
-export const logger = pino({
+export const logger = pino.default({
   level,
   redact: {
     paths: [

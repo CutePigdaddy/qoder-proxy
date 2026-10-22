@@ -24,6 +24,8 @@ const EnvSchema = z.object({
   QODER_QUOTA_TTL_MS: z.coerce.number().int().min(0).default(60_000),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   MODELS_CONFIG_PATH: z.string().default('config/models.json'),
+  // 公开人民币价目表（成本估算用）；config 目录是挂载卷，改价重启即可生效
+  PRICING_CONFIG_PATH: z.string().default('config/pricing.json'),
   // How to neutralise Claude Code's <total_tokens> markers, which otherwise
   // rewrite the system prompt tail every turn and void the prompt cache:
   //   move   - strip from system, re-attach the latest marker to the last
@@ -71,6 +73,7 @@ export interface AppConfig {
   quotaTtlMs: number;
   tokenMarkerMode: 'move' | 'strip' | 'keep';
   cacheDiagnostics: boolean;
+  pricingPath: string;
   models: ModelsConfig;
 }
 
@@ -99,6 +102,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     quotaTtlMs: e.QODER_QUOTA_TTL_MS,
     tokenMarkerMode: e.TOKEN_MARKER_MODE,
     cacheDiagnostics: e.CACHE_DIAGNOSTICS === '1',
+    pricingPath: e.PRICING_CONFIG_PATH,
     models: loadModelsConfig(e.MODELS_CONFIG_PATH, e.MODEL_FALLBACK),
   };
 }

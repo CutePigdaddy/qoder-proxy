@@ -21,6 +21,16 @@ interface Row {
     hitRate: number;
     peakPromptTokens: number;
   } | null;
+  rate: {
+    input: number;
+    cachedInput: number;
+    output: number;
+    tiers: number;
+    peak: { windows: string[]; multiplier: number } | null;
+    confidence: 'official' | 'estimate';
+    source: { label: string; url?: string } | null;
+    note: string | null;
+  } | null;
 }
 
 describe('GET /v1/models directory', () => {
@@ -52,6 +62,11 @@ describe('GET /v1/models directory', () => {
       is_default: false,
     });
     expect(qwen?.promotion).toMatchObject({ badge: '错峰 4 折' });
+    // 公开价目应该存在
+    expect(qwen?.rate).toBeTruthy();
+    expect(qwen?.rate?.input).toBe(12);
+    expect(qwen?.rate?.output).toBe(36);
+    expect(qwen?.rate?.cachedInput).toBe(1.5);
     expect(body.data.find((row) => row.id === 'GLM-5.2')).toMatchObject({ availability: 'config-only' });
   });
 

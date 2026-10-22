@@ -4,6 +4,7 @@ import { AdmissionGate } from './concurrency/admission.js';
 import { applyLogLevel, logger } from './obs/logger.js';
 import { metrics } from './obs/metrics.js';
 import { ModelLimits } from './obs/modelLimits.js';
+import { loadRateCard } from './obs/pricing.js';
 import { UsageStore } from './obs/usageStore.js';
 import { ModelResolver } from './openai/modelResolver.js';
 import { QoderClient } from './qoder/client.js';
@@ -75,6 +76,8 @@ async function main(): Promise<void> {
     aliases: config.models.aliases,
     fallback: config.models.fallback,
   });
+  // 价目表只读一次：面板上的成本是「按当前价目折算」的口径，改价后重启即可
+  const pricing = loadRateCard(config.pricingPath, logger);
 
   const updateGauges = (): void => {
     metrics.concurrency.set(gate.inFlight);
@@ -92,6 +95,7 @@ async function main(): Promise<void> {
     quota,
     usage,
     limits,
+    pricing,
     startTime: Date.now(),
     updateGauges,
   });

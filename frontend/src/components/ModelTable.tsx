@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { ModelEntry } from '../types';
-import { compact, hitTone, percent } from '../utils/format';
+import { compact, grouped, hitTone, percent } from '../utils/format';
 
 type SortKey = 'default' | 'context' | 'price' | 'usage';
 
@@ -22,10 +21,11 @@ const SORTS: Array<{ key: SortKey; label: string }> = [
   { key: 'usage', label: '用量' },
 ];
 
-/** 价格系数直接显示数字，与上游计费口径一致；免费模型单独用文案。 */
+/** 公开人民币价目（元/百万 tokens）；免费模型单独用文案。 */
 function priceText(entry: ModelEntry): string {
-  if (entry.pricing.free) return '免费';
-  return entry.pricing.factor === null ? '—' : String(entry.pricing.factor);
+  if (!entry.rate) return '未定价';
+  const r = entry.rate;
+  return `${grouped(r.input)} / ${grouped(r.output)} (缓存 ${grouped(r.cachedInput)})`;
 }
 
 function byContextNewest(a: ModelEntry, b: ModelEntry): number {
@@ -35,13 +35,16 @@ function byContextNewest(a: ModelEntry, b: ModelEntry): number {
 }
 
 function byPriceCheapest(a: ModelEntry, b: ModelEntry): number {
-  if (a.pricing.factor === null) return 1;
-  if (b.pricing.factor === null) return -1;
-  return a.pricing.factor - b.pricing.factor;
+  if (!a.rate && !b.rate) return 0;
+  if (!a.rate) return 1;
+  if (!b.rate) return -1;
+  // 按输入价排序，平局看输出价
+  if (a.rate.input !== b.rate.input) return a.rate.input - b.rate.input;
+  return a.rate.output - b.rate.output;
 }
 
-function statusBadges(entry: ModelEntry): ReactNode[] {
-  const badges: ReactNode[] = [];
+function statusBadges(entry: ModelEntry): React.ReactNode[] {
+  const badges: React.ReactNode[] = [];
   if (entry.is_default) {
     badges.push(
       <span className="badge badge-accent" key="default">
@@ -256,9 +259,7 @@ const ModelTable: React.FC<Props> = ({ models, loading, refreshing, error, hours
                 上下文
               </th>
               <th scope="col">能力</th>
-              <th scope="col" className="num">
-                价格系数
-              </th>
+              <th scope="col">公开价（元/百万 tokens）</th>
               <th scope="col">状态</th>
               <th scope="col" title="网关自己的闸门：上游并不按 token 数拦截">
                 网关上限
@@ -284,7 +285,6 @@ const ModelTable: React.FC<Props> = ({ models, loading, refreshing, error, hours
             ) : (
               rows.map((entry) => {
                 const badges = statusBadges(entry);
-                const original = entry.pricing.originalFactor;
                 return (
                   <tr key={entry.upstream_model}>
                     <td>
@@ -315,12 +315,7 @@ const ModelTable: React.FC<Props> = ({ models, loading, refreshing, error, hours
                         )}
                       </div>
                     </td>
-                    <td className="num mono">
-                      {original !== null && original !== entry.pricing.factor && (
-                        <s className="price-was" title="促销前系数">
-                          {original}
-                        </s>
-                      )}
+                    <td className="mono">
                       {priceText(entry)}
                     </td>
                     <td>

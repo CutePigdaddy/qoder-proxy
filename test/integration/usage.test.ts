@@ -44,6 +44,11 @@ describe('/v1/usage/dashboard', () => {
     expect(data.cache.hitRate).toBe(83.3);
     expect(data.byModel[0].model).toBe('Test-Model');
     expect(data.byModel[0].requests).toBe(1);
+    // 成本字段应该存在
+    expect(data.cost).toBeDefined();
+    expect(data.cost.total).toBeDefined();
+    expect(data.cost.baseline).toBeDefined();
+    expect(data.cost.cacheSavings).toBeDefined();
   });
 
   it('aggregates several requests into one model row and sums tokens', async () => {
@@ -57,6 +62,7 @@ describe('/v1/usage/dashboard', () => {
     expect(data.byModel).toHaveLength(1);
     expect(data.byModel[0].requests).toBe(3);
     expect(data.summary.totalTokens).toBe(3 * (1_000 + 200 + 30));
+    expect(data.cost.total).toBeGreaterThan(0);
   });
 
   it('counts failures into the error rate without inventing tokens', async () => {
@@ -73,6 +79,7 @@ describe('/v1/usage/dashboard', () => {
     expect(data.summary.errorRate).toBe(100);
     expect(data.cache.hitRate).toBe(0);
     expect(data.recentLogs[0].status).toBe(502);
+    expect(data.cost.total).toBe(0);
   });
 
   it('returns an empty, well-formed payload before any traffic', async () => {
@@ -84,6 +91,8 @@ describe('/v1/usage/dashboard', () => {
     expect(data.cache.trend).toEqual([]);
     // 时间轴仍然给出固定数量的桶，图表不会因为没数据而塌掉
     expect(data.timeSeries.tokens).toHaveLength(24);
+    expect(data.cost).toBeDefined();
+    expect(data.cost.total).toBe(0);
   });
 
   it('stays behind the API key gate', async () => {

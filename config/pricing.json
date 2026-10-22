@@ -1,0 +1,99 @@
+{
+  "currency": "CNY",
+  "unit": 1000000,
+  "retrievedAt": "2026-10-22",
+  "note": "厂商公开价目表，单位：元 / 百万 tokens。三个计费项分别是「新增输入（缓存未命中）」「命中缓存的输入」「输出」。改价只需编辑本文件后重启（config 目录已挂载，无需重建镜像）。数据来源：阿里云百炼、智谱 BigModel、Kimi 开放平台、MiniMax 中国站、DeepSeek 开放平台；models.dev 仅参考美元价并折算为人民币。",
+  "models": {
+    "Auto": {
+      "tiers": [{ "upTo": null, "input": 1, "cachedInput": 0.2, "output": 4 }],
+      "confidence": "estimate",
+      "source": { "label": "Qoder model/list price_factor" },
+      "note": "Auto 由上游自动选模，没有公开价。按计费系数 0.5 × 中档模型价（Qwen3.7-Plus，2 / 0.4 / 8）折算；实际成本取决于当次路由到的模型。"
+    },
+    "Qwen3.8-Max": {
+      "tiers": [{ "upTo": null, "input": 12, "cachedInput": 1.5, "output": 36 }],
+      "confidence": "official",
+      "source": { "label": "阿里云百炼 · Qwen3.8-Max", "url": "https://bailian.console.aliyun.com/" }
+    },
+    "Qwen3.8-Flash": {
+      "tiers": [{ "upTo": null, "input": 0.8, "cachedInput": 0.1, "output": 2.7 }],
+      "confidence": "official",
+      "source": { "label": "阿里云百炼 · Qwen3.8-Flash", "url": "https://bailian.console.aliyun.com/" }
+    },
+    "Qwen3.7-Max": {
+      "tiers": [{ "upTo": null, "input": 12, "cachedInput": 2.4, "output": 36 }],
+      "confidence": "official",
+      "source": { "label": "阿里云百炼 · Qwen3.7-Max", "url": "https://bailian.console.aliyun.com/" },
+      "note": "百炼未单列缓存命中价，按隐式缓存 2 折（与 qwen3-max 的国际价口径一致）推算。"
+    },
+    "Qwen3.7-Plus": {
+      "tiers": [{ "upTo": null, "input": 2, "cachedInput": 0.4, "output": 8 }],
+      "confidence": "official",
+      "source": { "label": "阿里云百炼 · Qwen3.7-Plus", "url": "https://bailian.console.aliyun.com/" }
+    },
+    "Qwen3.7-Flash": {
+      "tiers": [
+        { "upTo": 32000, "input": 0.2, "cachedInput": 0.04, "output": 0.8 },
+        { "upTo": 256000, "input": 0.6, "cachedInput": 0.12, "output": 2.4 },
+        { "upTo": null, "input": 1.2, "cachedInput": 0.24, "output": 4.8 }
+      ],
+      "confidence": "official",
+      "source": { "label": "阿里云百炼 · qwen3.7-flash 阶梯价", "url": "https://help.aliyun.com/zh/model-studio/qwen3-7-flash" },
+      "note": "按单次请求的输入 token 总量选档，整个请求按该档单价结算。"
+    },
+    "DeepSeek-V4-Pro": {
+      "tiers": [{ "upTo": null, "input": 4.5, "cachedInput": 0.15, "output": 13.5 }],
+      "peak": {
+        "windows": ["09:00-12:00", "14:00-18:00"],
+        "weekdaysOnly": true,
+        "multiplier": 2
+      },
+      "confidence": "official",
+      "source": { "label": "DeepSeek 开放平台 · 峰谷定价（2026-08-17 生效）", "url": "https://api-docs.deepseek.com/quick_start/pricing" },
+      "note": "表内为闲时价；工作日 09:00–12:00、14:00–18:00（北京时间）三项单价全部翻倍。"
+    },
+    "DeepSeek-Flash": {
+      "tiers": [{ "upTo": null, "input": 1, "cachedInput": 0.02, "output": 4 }],
+      "peak": {
+        "windows": ["09:00-12:00", "14:00-18:00"],
+        "weekdaysOnly": true,
+        "multiplier": 2
+      },
+      "confidence": "official",
+      "source": { "label": "DeepSeek 开放平台 · 峰谷定价（2026-08-17 生效）", "url": "https://api-docs.deepseek.com/quick_start/pricing" },
+      "note": "V4.1 Flash 口径，表内为闲时价，峰时翻倍。"
+    },
+    "GLM-5.3": {
+      "tiers": [{ "upTo": null, "input": 8, "cachedInput": 2, "output": 28 }],
+      "confidence": "official",
+      "source": { "label": "智谱 BigModel · GLM-5.3", "url": "https://docs.bigmodel.cn/" }
+    },
+    "GLM-5.3-Flash": {
+      "tiers": [{ "upTo": null, "input": 0.8, "cachedInput": 0.23, "output": 2.8 }],
+      "confidence": "official",
+      "source": { "label": "智谱 BigModel · GLM-5.3-Flash", "url": "https://docs.bigmodel.cn/" }
+    },
+    "GLM-5.2": {
+      "tiers": [{ "upTo": null, "input": 8, "cachedInput": 2, "output": 28 }],
+      "confidence": "official",
+      "source": { "label": "智谱 BigModel · GLM-5.2", "url": "https://docs.bigmodel.cn/" }
+    },
+    "Kimi-K3": {
+      "tiers": [{ "upTo": null, "input": 20, "cachedInput": 2, "output": 100 }],
+      "confidence": "official",
+      "source": { "label": "Kimi 开放平台 · K3", "url": "https://platform.moonshot.cn/docs/pricing/chat-k3" },
+      "note": "缓存写入（5min TTL）另按 20 元/百万 tokens 计；本表只区分命中与未命中。"
+    },
+    "Kimi-K2.8-Preview": {
+      "tiers": [{ "upTo": null, "input": 6.5, "cachedInput": 1.1, "output": 27 }],
+      "confidence": "estimate",
+      "source": { "label": "Kimi 开放平台 · K2 系列", "url": "https://platform.moonshot.cn/docs/pricing/chat-k3" },
+      "note": "K2.8-Preview 官方未单列人民币价，按 K2.6 / K2.7-Code 的官方价（6.5 / 27，缓存命中 1.1）估算。"
+    },
+    "MiniMax-M2.7": {
+      "tiers": [{ "upTo": null, "input": 2.1, "cachedInput": 0.42, "output": 8.4 }],
+      "confidence": "official",
+      "source": { "label": "MiniMax 开放平台（中国站）· M2.7", "url": "https://platform.minimax.cn/docs/pricing/overview" }
+    }
+  }
+}

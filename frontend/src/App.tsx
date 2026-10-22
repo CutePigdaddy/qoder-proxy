@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import CacheStats from './components/CacheStats';
+import CostPanel from './components/CostPanel';
 import KeyMetrics from './components/KeyMetrics';
 import ModelTable from './components/ModelTable';
 import RequestLogTable from './components/RequestLogTable';
@@ -265,6 +266,7 @@ function App() {
                 onRefresh={refresh}
                 refreshing={refreshing}
               />
+              <CostPanel cost={data.cost} byModel={data.byModel} />
               <RequestLogTable rows={data.recentLogs} />
             </main>
           ) : (
