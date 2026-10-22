@@ -29,7 +29,10 @@ export interface Deps {
   errors: ErrorStore;
   /** 公开人民币价目表；成本估算的唯一价格来源 */
   pricing: RateCard;
-  /** 模型可用性探测器；PROBE_ENABLED=0 时为 null，面板显示「—」 */
+  /**
+   * 模型可用性统计。默认是「被动观测」：样本来自真实请求，零额外上游调用；
+   * `PROBE_ENABLED=1` 时才叠加主动探测。窗口内没样本时面板显示「—」。
+   */
   probe: AvailabilityProber | null;
   startTime: number;
   /** Push current concurrency/queue values into the exported gauges. */

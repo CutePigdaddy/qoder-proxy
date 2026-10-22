@@ -2,16 +2,39 @@ import type { Logger } from 'pino';
 import type { IRRequest } from '../ir/types.js';
 import type { ModelListEntry } from '../openai/modelResolver.js';
 import type { QoderClient, ResolvedModel } from '../qoder/client.js';
-import { ClientGoneError, CredentialRejectedError, ResourceLimitError } from '../util/errors.js';
+import {
+  ClientGoneError,
+  CredentialRejectedError,
+  ResourceLimitError,
+  classifyFailure,
+} from '../util/errors.js';
 
 /**
- * 一次探测的结果。
+ * 一次可用性样本的结果。
  *
  * `no-capacity` 与 `error` 必须分开：前者是「上游服务正常，但这个账号档位此刻
  * 没有资源」（10605 + RESOURCE_LIMIT），后者是真正的故障。把两者混成一个
  * 「不可用」，就又会回到「分不清是上游坏了还是自己被限了」的老问题上。
+ *
+ * `quota` 是第三类，只在被动观测里出现：额度/次数耗尽（110/112…）与模型无关，
+ * 是所有模型同时不可用。混进 `error` 会让每个模型都像是坏了。
  */
-export type ProbeOutcome = 'ok' | 'no-capacity' | 'timeout' | 'credential' | 'error';
+export type ProbeOutcome = 'ok' | 'no-capacity' | 'quota' | 'timeout' | 'credential' | 'error';
+
+const OUTCOMES: readonly ProbeOutcome[] = [
+  'ok',
+  'no-capacity',
+  'quota',
+  'timeout',
+  'credential',
+  'error',
+];
+
+function zeroOutcomes(): Record<ProbeOutcome, number> {
+  const out = {} as Record<ProbeOutcome, number>;
+  for (const key of OUTCOMES) out[key] = 0;
+  return out;
+}
 
 export interface ProbeSample {
   ts: number;
@@ -25,13 +48,14 @@ export type ProbeState = 'ok' | 'degraded' | 'down' | 'unknown';
 export interface ProbeSummary {
   /** 统计窗口毫秒数（默认 5 分钟） */
   windowMs: number;
-  /** 窗口内的探测次数 */
+  /** 窗口内的样本数（真实请求 + 主动探测，见类注释） */
   samples: number;
   /** 成功占比 0-100，一位小数 */
   successRate: number;
-  /** 成功样本的平均首字节耗时；没有成功样本时为 0 */
+  /** 成功样本的平均耗时；没有成功样本时为 0 */
   avgLatencyMs: number;
   lastOutcome: ProbeOutcome | null;
+  /** 最近一次样本的时间戳；字段名为兼容既有前端保留 */
   lastProbeAt: number | null;
   state: ProbeState;
   /** 窗口内每种结果各几次，用来回答「为什么不可用」 */
@@ -96,6 +120,50 @@ export function classifyProbeError(error: unknown, aborted: boolean): ProbeOutco
   return 'error';
 }
 
+/**
+ * 把一次真实请求的结局折算成可用性样本。
+ *
+ * 返回 `null` 表示「这次不该计入可用性」——客户端自己挂断（499）与模型好坏无关，
+ * 把它算进来会让可用性看起来比实际差。
+ *
+ * 这里复用 `classifyFailure`，保证「日志里的错误类型」与「可用性里的失败原因」
+ * 是同一套判定，不会出现同一个 10605 在两处被归成不同东西。
+ */
+export function outcomeOfFailure(error: unknown, status: number): ProbeOutcome | null {
+  if (status === 200) return 'ok';
+  if (status === 499) return null;
+  switch (classifyFailure(error, status)) {
+    case 'resource-limit':
+      return 'no-capacity';
+    case 'quota':
+      return 'quota';
+    case 'timeout':
+      return 'timeout';
+    case 'credential':
+      return 'credential';
+    case 'client-gone':
+      return null;
+    default:
+      return 'error';
+  }
+}
+
+/**
+ * 重启回填时的粗略折算：usage 日志只有 status，没有错误类型。
+ *
+ * 精度不如实时观测（429 分不清是配额还是限流），但它的唯一目的是「重启后窗口
+ * 不要瞬间变空」，粗略够用，且比伪造精确更诚实。
+ */
+export function outcomeOfStatus(status: number): ProbeOutcome | null {
+  if (status === 200) return 'ok';
+  if (status === 499) return null;
+  if (status === 429) return 'quota';
+  if (status === 503) return 'no-capacity';
+  if (status === 504) return 'timeout';
+  if (status === 401 || status === 403) return 'credential';
+  return 'error';
+}
+
 export function stateOf(successRate: number, samples: number): ProbeState {
   if (samples === 0) return 'unknown';
   if (successRate >= OK_THRESHOLD) return 'ok';
@@ -104,19 +172,23 @@ export function stateOf(successRate: number, samples: number): ProbeState {
 }
 
 /**
- * 模型可用性探测器。
+ * 模型可用性统计。
  *
- * 它借用真实的上游通道发最小的请求，所以「探测结果」就是「现在能不能用」，
- * 而不是靠推断。代价是每次探测都会占用一次上游调用，因此有三条硬约束：
+ * 有两种数据来源，共用同一份样本结构与同一个 `summary()` 口径：
  *
- * 1. **不写 usage、不写错误日志**。否则面板上的请求数、成本、命中率会被探针
- *    淹没，错误页也会被上百条 `RESOURCE_LIMIT` 刷满，真实故障反而看不见。
- * 2. **不做内部重试**（`maxBusyRetries: 0`）。测的是「此刻」，重试会把一次
- *    探测拉长到秒级，也会把瞬时的失败抹成成功，指标就失去意义。
- * 3. **串行 + 间隔**。同一轮内逐个探测，避免十几个模型同时打上游把它们自己
- *    压成不可用——那样测出来的是探针的副作用，不是真实可用性。
+ * **① 被动观测（默认，也是长期方案）**
+ * 每次真实请求结束后由路由调用 `observe()`。零额外上游请求、零配额消耗，
+ * 衡量的是「你实际用的时候成功率多少」——这比人造探针更贴近体感。
+ * 代价是没人用的模型没有数据（面板显示「—」），这是诚实的：没有信息就是没有。
  *
- * 样本只留内存：可用性是"现在"的属性，重启后重新积累比持久化一堆过期样本更有意义。
+ * **② 主动探测（可选，默认关闭）**
+ * `start()` 后用免费通道发最小请求，能给冷门模型也造出样本。但 2026-10-22
+ * 的事故证明它很危险：`FREE_INPUT` 不扣 credits，却计入上游「每日计费请求
+ * 次数」（code 110），14 模型 × 30s 十几分钟就把当天额度打光，之后**连用户的
+ * 真实请求也一起 429**。所以它默认关，且自带每日硬预算。
+ *
+ * 样本只留内存：可用性是"现在"的属性。重启后由 `seed()` 用窗口内的真实用量
+ * 回填，避免刚重启时整列变空。
  */
 export class AvailabilityProber {
   private readonly samples: ProbeSample[] = [];
@@ -170,13 +242,7 @@ export class AvailabilityProber {
       return;
     }
     this.running = true;
-    const counts: Record<ProbeOutcome, number> = {
-      ok: 0,
-      'no-capacity': 0,
-      timeout: 0,
-      credential: 0,
-      error: 0,
-    };
+    const counts: Record<ProbeOutcome, number> = zeroOutcomes();
     try {
       const entries = this.targets(await this.opts.resolver.list());
       for (const entry of entries) {
@@ -197,19 +263,45 @@ export class AvailabilityProber {
     }
   }
 
-  /** 窗口内该模型的可用性；从未探测过返回 null（面板显示「—」）。 */
+  /**
+   * 记录一次**真实请求**的结局。这是默认也是长期模式的数据来源：
+   * 不产生任何额外上游请求，因此永远不会消耗配额。
+   */
+  observe(model: string, outcome: ProbeOutcome, latencyMs: number): void {
+    if (this.stopped) return;
+    this.samples.push({ ts: this.now(), model, outcome, latencyMs });
+    this.trim();
+  }
+
+  /**
+   * 重启后回填窗口内的历史用量，避免整列可用性瞬间变成「—」。
+   * 只读 usage 记录，不发任何请求。返回实际灌入的条数。
+   */
+  seed(rows: Iterable<{ ts: number; model: string; status: number; durationMs: number }>): number {
+    const cutoff = this.now() - this.opts.windowMs;
+    let added = 0;
+    for (const row of rows) {
+      if (row.ts < cutoff) continue;
+      const outcome = outcomeOfStatus(row.status);
+      if (!outcome) continue;
+      this.samples.push({ ts: row.ts, model: row.model, outcome, latencyMs: row.durationMs });
+      added += 1;
+    }
+    if (added > 0) {
+      // usage 按写入顺序本已升序，但回填可能与实时样本交错，稳妥起见重排
+      this.samples.sort((a, b) => a.ts - b.ts);
+    }
+    this.trim();
+    return added;
+  }
+
+  /** 窗口内该模型的可用性；窗口内没有样本返回 null（面板显示「—」）。 */
   summary(model: string): ProbeSummary | null {
     const cutoff = this.now() - this.opts.windowMs;
     const rows = this.samples.filter((sample) => sample.model === model && sample.ts >= cutoff);
     if (rows.length === 0) return null;
 
-    const outcomes: Record<ProbeOutcome, number> = {
-      ok: 0,
-      'no-capacity': 0,
-      timeout: 0,
-      credential: 0,
-      error: 0,
-    };
+    const outcomes: Record<ProbeOutcome, number> = zeroOutcomes();
     let latencySum = 0;
     let okCount = 0;
     let last: ProbeSample | undefined;

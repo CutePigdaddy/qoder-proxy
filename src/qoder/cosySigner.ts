@@ -38,6 +38,15 @@ export interface CosyCredentials {
   name: string;
   email: string;
   machineID: string;
+  /**
+   * `Cosy-Clienttype` 的取值，缺省用 CLI(=5)。
+   *
+   * 2026-10-22 实测：这个头决定上游按哪条通道结算。5 走计费通道（账号
+   * credits 为 0 时直接 `code 112` 拒绝）；1–4 走另一条通道，不消耗 credits。
+   * 它不参与签名计算，只是身份声明——所以是否改由调用方决定，见
+   * `QODER_CLIENT_TYPE`。
+   */
+  clientType?: string;
 }
 
 function rsaEncryptBase64(data: string): string {
@@ -111,7 +120,7 @@ export function buildCosyHeaders(
     'Cosy-Machinetoken': creds.machineID,
     'Cosy-Machinetype': COSY_MACHINE_TYPE,
     'Cosy-Machineos': COSY_MACHINE_OS,
-    'Cosy-Clienttype': COSY_CLIENT_TYPE,
+    'Cosy-Clienttype': creds.clientType ?? COSY_CLIENT_TYPE,
     'Cosy-Clientip': '127.0.0.1',
     'Cosy-Bodyhash': bodyHash,
     'Cosy-Bodylength': String(bodyBuffer.length),
@@ -153,7 +162,14 @@ export function getOrCreateMachineId(cacheDir: string): string {
 export function buildCosyHeadersFor(
   body: Buffer | string | null,
   requestUrl: string,
-  creds: { userID: string; jobToken: string; name: string; email: string; machineID: string },
+  creds: {
+    userID: string;
+    jobToken: string;
+    name: string;
+    email: string;
+    machineID: string;
+    clientType?: string;
+  },
 ): Record<string, string> {
   return buildCosyHeaders(body, requestUrl, {
     userID: creds.userID,
@@ -161,5 +177,6 @@ export function buildCosyHeadersFor(
     name: creds.name,
     email: creds.email,
     machineID: creds.machineID,
+    ...(creds.clientType ? { clientType: creds.clientType } : {}),
   });
 }

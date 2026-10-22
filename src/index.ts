@@ -63,6 +63,7 @@ async function main(): Promise<void> {
     tokenMarkerMode: config.tokenMarkerMode,
     retryMaxWaitMs: config.retryMaxWaitMs,
     cacheDiagnostics: config.cacheDiagnostics,
+    clientType: config.clientType,
   });
   const quota = new QuotaService({ endpoints, credentials, ttlMs: config.quotaTtlMs });
   const gate = new AdmissionGate(config.concurrency, config.queueLimit);
@@ -83,37 +84,43 @@ async function main(): Promise<void> {
   // 价目表只读一次：面板上的成本是「按当前价目折算」的口径，改价后重启即可
   const pricing = loadRateCard(config.pricingPath, logger);
 
-  // 探测器单独一个 client，maxBusyRetries=0：探测要的是「此刻」的答案，
-  // 内部重试会把一次失败抹成成功，也会把周期拉长到秒级。
-  const probe = config.probe.enabled
-    ? new AvailabilityProber({
-        client: new QoderClient({
+  // 可用性统计默认走「被动观测」：样本来自每一次真实请求，零额外上游调用，
+  // 因此永远不会消耗配额（2026-10-22 的事故就是因为主动探测烧掉了每日次数）。
+  // 只有 PROBE_ENABLED=1 时才叠加主动探测，它自带独立 client 与每日硬预算。
+  const probe = new AvailabilityProber({
+    client: config.probe.enabled
+      ? new QoderClient({
           endpoints,
           credentials,
           tokenMarkerMode: config.tokenMarkerMode,
           retryMaxWaitMs: config.retryMaxWaitMs,
           maxBusyRetries: 0,
           cacheDiagnostics: false,
-        }),
-        resolver,
-        logger,
-        intervalMs: config.probe.intervalMs,
-        windowMs: config.probe.windowMs,
-        dailyBudget: config.probe.dailyBudget,
-        models: config.probe.models,
-      })
-    : null;
-  if (probe) {
-    logger.info(
-      {
-        intervalMs: config.probe.intervalMs,
-        windowMs: config.probe.windowMs,
-        dailyBudget: config.probe.dailyBudget,
-        models: config.probe.models,
-      },
-      'availability probing enabled (counts against the daily request quota)',
-    );
-  }
+          clientType: config.clientType,
+        })
+      : client,
+    resolver,
+    logger,
+    intervalMs: config.probe.intervalMs,
+    windowMs: config.probe.windowMs,
+    dailyBudget: config.probe.dailyBudget,
+    models: config.probe.models,
+  });
+  // 回填窗口内的真实用量：重启后不必从零积累，可用性列不会瞬间变空
+  const seeded = probe.seed(usage.since(Date.now() - config.probe.windowMs));
+  logger.info(
+    {
+      windowMs: config.probe.windowMs,
+      seeded,
+      activeProbing: config.probe.enabled,
+      ...(config.probe.enabled
+        ? { intervalMs: config.probe.intervalMs, dailyBudget: config.probe.dailyBudget }
+        : {}),
+    },
+    config.probe.enabled
+      ? 'availability: observing real traffic + active probing (probing counts against the daily request quota)'
+      : 'availability: observing real traffic only (no extra upstream requests)',
+  );
 
   const updateGauges = (): void => {
     metrics.concurrency.set(gate.inFlight);
@@ -150,12 +157,12 @@ async function main(): Promise<void> {
     );
   });
 
-  // 首轮延迟内置在 start() 里：让启动时的模型目录拉取先完成
-  probe?.start();
+  // 主动探测可选：默认关闭，只用真实流量观测（首轮延迟内置在 start() 里）
+  if (config.probe.enabled) probe.start();
 
   const shutdown = (signal: string): void => {
     logger.info({ signal }, 'shutting down');
-    probe?.stop();
+    probe.stop();
     // Flush pending usage/error rows / limit edits so a restart loses nothing.
     void Promise.all([usage.flush(), errors.flush(), limits.flush()]).finally(() =>
       server.close(() => process.exit(0)),

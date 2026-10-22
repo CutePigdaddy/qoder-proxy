@@ -202,6 +202,14 @@ export class QoderClient {
       maxBusyRetries?: number;
       /** Emit the prompt-cache hash grids on the usage event (`CACHE_DIAGNOSTICS=1`). */
       cacheDiagnostics?: boolean;
+      /**
+       * `Cosy-Clienttype` 的取值，缺省用 CLI(=5)。
+       *
+       * 实测（2026-10-22）：这个头决定上游按哪条通道结算 —— 5 是计费通道，
+       * 1–4 不计 credits。它是身份声明而非签名要素，所以：
+       * **默认保持 5（不伪装），要不要改由配置决定**。
+       */
+      clientType?: string;
     },
   ) {
     this.retryMaxWaitMs = opts.retryMaxWaitMs ?? DEFAULT_RETRY_MAX_WAIT_MS;
@@ -354,7 +362,10 @@ export class QoderClient {
 
     const encodedBody = encodeQoderBody(Buffer.from(JSON.stringify(body)));
     const encodedBytes = Buffer.from(encodedBody, 'utf8');
-    const headers = buildCosyHeadersFor(encodedBytes, this.opts.endpoints.chat, creds);
+    const headers = buildCosyHeadersFor(encodedBytes, this.opts.endpoints.chat, {
+      ...creds,
+      ...(this.opts.clientType ? { clientType: this.opts.clientType } : {}),
+    });
 
     let response: Response;
     try {

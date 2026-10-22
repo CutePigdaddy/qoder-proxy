@@ -40,21 +40,33 @@ const EnvSchema = z.object({
   // conversation and runs ~144 SHA-256 passes per usage event. Forensics only,
   // so it stays off unless someone is actively chasing a cache regression.
   CACHE_DIAGNOSTICS: z.enum(['0', '1']).default('0'),
-  // 模型可用性探测。
+  // 模型可用性统计。
   //
-  // 重要教训（2026-10-22）：`FREE_INPUT` 不扣 credits，**但计入每日计费请求次数**
-  // （上游 code 110 "Billing daily count exceeded"）。每 30s 探 14 个模型 =
-  // 28 次/分钟，十几分钟就能把当天的次数配额打爆，随后所有真实请求一起 429。
-  // 所以这里默认【关闭】，并且强制带日预算保护。
+  // 默认只做**被动观测**：样本来自每一次真实请求，零额外上游调用，永远不会
+  // 消耗配额。衡量的是「你实际用的时候成功率多少」，比人造探针更贴近体感。
+  //
+  // 主动探测默认【关闭】，因为 2026-10-22 的教训很贵：`FREE_INPUT` 不扣
+  // credits，**但计入每日计费请求次数**（上游 code 110 "Billing daily count
+  // exceeded"）。每 30s 探 14 个模型 = 28 次/分钟，十几分钟就把当天的次数
+  // 配额打爆，随后所有真实请求一起 429。
   PROBE_ENABLED: z.enum(['0', '1']).default('0'),
-  // 默认 5 分钟一轮：即便开启，也要让每日次数消耗保持在个位数每小时的量级。
+  // 开启主动探测时的轮询周期；默认 5 分钟，让每日次数消耗保持在个位数/小时。
   PROBE_INTERVAL_MS: z.coerce.number().int().min(5_000).default(300_000),
-  PROBE_WINDOW_MS: z.coerce.number().int().min(60_000).default(300_000),
+  // 统计窗口。被动模式下窗口太短会经常没有样本，15 分钟是「够新鲜 + 有样本」的折中。
+  PROBE_WINDOW_MS: z.coerce.number().int().min(60_000).default(900_000),
   // 每日探测次数硬上限（北京时间自然日重置）。0 = 不限制（不建议）。
   PROBE_DAILY_BUDGET: z.coerce.number().int().min(0).default(200),
   // 逗号分隔的模型白名单（显示名或 id）；留空 = 目录里的全部模型。
   // 全目录 × 30s 是最危险的组合，开启前请先算一下次数。
   PROBE_MODELS: z.string().default(''),
+
+  // 客户端身份声明（`Cosy-Clienttype` 头）。
+  //
+  // 默认 '5' = 官方 CLI，这是我们真实的身份，也是诚实的默认值。
+  // 实测（2026-10-22）：5 走计费通道（credits 为 0 时直接 code 112）；
+  // 1–4 走另一条通道、不消耗 credits —— 但那是**改变身份声明**，
+  // 属于绕过上游计费判定的行为，是否使用请自行权衡合规风险。
+  QODER_CLIENT_TYPE: z.string().default('5'),
 });
 
 export interface ModelMapping {
@@ -93,6 +105,12 @@ export interface AppConfig {
   tokenMarkerMode: 'move' | 'strip' | 'keep';
   cacheDiagnostics: boolean;
   pricingPath: string;
+  /**
+   * `Cosy-Clienttype` 的取值。默认 '5' 就是官方 CLI 身份，保持诚实。
+   * 改成 1–4 会让上游按另一条通道结算（实测不计 credits），但那是身份声明
+   * 层面的改变，不是技术参数，所以默认不动、只留出口。
+   */
+  clientType: string;
   /** 可用性探测器开关与采样参数 */
   probe: {
     enabled: boolean;
@@ -132,6 +150,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     tokenMarkerMode: e.TOKEN_MARKER_MODE,
     cacheDiagnostics: e.CACHE_DIAGNOSTICS === '1',
     pricingPath: e.PRICING_CONFIG_PATH,
+    clientType: e.QODER_CLIENT_TYPE,
     probe: {
       enabled: e.PROBE_ENABLED === '1',
       intervalMs: e.PROBE_INTERVAL_MS,

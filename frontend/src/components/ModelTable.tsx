@@ -210,12 +210,13 @@ const PROBE_SMALL_SAMPLE = 3;
 
 /**
  * 可用性单元格：主数字是窗口内的成功率，副行是样本数。
- * 样本太少时不上色——一次探测失败就能把 1/1 拉成 0%，那是噪声不是趋势。
+ * 数据来自真实请求（不额外打上游），样本太少时不上色——一次失败就能把 1/1
+ * 拉成 0%，那是噪声不是趋势。
  */
 function ProbeCell({ probe }: { probe: ProbeSummary | null }) {
   if (!probe) {
     return (
-      <span className="muted" title="探测未启用，或还没有采到样本">
+      <span className="muted" title="这段时间没有请求流量，无从判断">
         —
       </span>
     );
@@ -230,10 +231,11 @@ function ProbeCell({ probe }: { probe: ProbeSummary | null }) {
         : 'poor';
   const o = probe.outcomes;
   const detail = [
-    `窗口 ${Math.round(probe.windowMs / 1000)}s，探测 ${probe.samples} 次`,
-    `成功 ${o.ok} · 无资源 ${o['no-capacity']} · 超时 ${o.timeout} · 错误 ${o.error}`,
+    `近 ${Math.round(probe.windowMs / 60000)} 分钟内 ${probe.samples} 次真实请求`,
+    `成功 ${o.ok} · 无资源 ${o['no-capacity']} · 额度用尽 ${o.quota} · 超时 ${o.timeout} · 错误 ${o.error}`,
     o.credential > 0 ? `凭据被拒 ${o.credential}` : '',
     probe.avgLatencyMs > 0 ? `成功平均 ${probe.avgLatencyMs}ms` : '',
+    '数据来自真实流量，不额外请求上游',
   ]
     .filter(Boolean)
     .join('\n');

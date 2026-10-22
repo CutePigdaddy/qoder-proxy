@@ -156,7 +156,7 @@ export interface ModelUsage {
   peakPromptTokens: number;
 }
 
-export type ProbeOutcome = 'ok' | 'no-capacity' | 'timeout' | 'credential' | 'error';
+export type ProbeOutcome = 'ok' | 'no-capacity' | 'quota' | 'timeout' | 'credential' | 'error';
 export type ProbeState = 'ok' | 'degraded' | 'down' | 'unknown';
 
 /** 最近一个窗口内的实测可用性；null = 探测未启用或还没有样本 */

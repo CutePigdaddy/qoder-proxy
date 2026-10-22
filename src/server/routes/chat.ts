@@ -2,6 +2,7 @@ import type { Context, Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Release } from '../../concurrency/admission.js';
+import { outcomeOfFailure } from '../../obs/availability.js';
 import { redactSecrets } from '../../obs/logger.js';
 import { metrics } from '../../obs/metrics.js';
 import { inferApplication } from '../../obs/usageStore.js';
@@ -44,7 +45,14 @@ export function registerChat(app: Hono, deps: Deps): void {
     /** Last usage frame seen for this request; null when the upstream never sent one. */
     let tokens: { prompt: number; completion: number; cached: number } | null = null;
 
-    const record = (status: string): void => {
+    /**
+     * 一条请求的完整记录：用量行 + 一次可用性样本。
+     *
+     * 可用性从这里取数，是「被动观测」模式的唯一入口——不发任何额外请求，
+     * 所以永远不会消耗上游配额。`error` 只用于区分失败原因（档位/配额/超时），
+     * 不传也能按 status 归类。
+     */
+    const record = (status: string, error?: unknown): void => {
       metrics.requests.inc({ model: modelKey, status });
       const durationMs = Date.now() - started;
       metrics.duration.observe(durationMs / 1000);
@@ -65,6 +73,12 @@ export function registerChat(app: Hono, deps: Deps): void {
         status: Number(status) || 0,
         ...(ua ? { ua: ua.slice(0, 160) } : {}),
       });
+      // `modelKey` 保持 'unknown' 说明请求在解析出模型之前就失败了，
+      // 这种样本归不到任何模型，记录它只会污染每行的分母。
+      if (modelKey !== 'unknown') {
+        const outcome = outcomeOfFailure(error, Number(status) || 0);
+        if (outcome) deps.probe?.observe(modelKey, outcome, durationMs);
+      }
     };
 
     /**
@@ -177,12 +191,12 @@ export function registerChat(app: Hono, deps: Deps): void {
           const message = gone
             ? 'Client closed the connection while queued'
             : 'Request timed out while queued';
-          record(String(status));
+          record(String(status), error);
           recordError(status, 'queue', message, { error });
           return errorResponse(c, status, message);
         }
         const retryAfter = error instanceof HttpError && error.retryAfter ? error.retryAfter : 5;
-        record('429');
+        record('429', error);
         recordError(429, 'queue', 'Gateway is at capacity, retry shortly', { error });
         return errorResponse(c, 429, 'Gateway is at capacity, retry shortly', retryAfter);
       }
@@ -241,7 +255,7 @@ export function registerChat(app: Hono, deps: Deps): void {
             const message = redactSecrets(error instanceof Error ? error.message : String(error));
             const status = error instanceof HttpError ? error.status : 502;
             metrics.upstreamErrors.inc({ status: String(status) });
-            record(String(status));
+            record(String(status), error);
             recordError(status, 'upstream', message, { error });
             deps.logger.warn({ err: message, model: modelKey, status }, 'stream failed');
 
@@ -280,7 +294,7 @@ export function registerChat(app: Hono, deps: Deps): void {
       const status = error instanceof HttpError ? error.status : 502;
       const message = redactSecrets(error instanceof Error ? error.message : String(error));
       metrics.upstreamErrors.inc({ status: String(status) });
-      record(String(status));
+      record(String(status), error);
       recordError(status, 'upstream', message, { error });
       deps.logger.warn({ err: message, model: modelKey, status }, 'request failed');
       return errorResponse(
