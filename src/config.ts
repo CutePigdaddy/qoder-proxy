@@ -19,6 +19,8 @@ const EnvSchema = z.object({
   // Per-request usage log backing the dashboard. Lives beside the token cache so
   // it rides the same persisted volume; sees append-only writes.
   USAGE_LOG_PATH: z.string().default('.cache/usage.jsonl'),
+  // 面板里设置的每模型输入上限；空文件 = 不限制
+  MODEL_LIMITS_PATH: z.string().default('.cache/model-limits.json'),
   QODER_QUOTA_TTL_MS: z.coerce.number().int().min(0).default(60_000),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   MODELS_CONFIG_PATH: z.string().default('config/models.json'),
@@ -64,6 +66,7 @@ export interface AppConfig {
   bodyLimit: number;
   tokenCachePath: string;
   usageLogPath: string;
+  modelLimitsPath: string;
   logLevel: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent';
   quotaTtlMs: number;
   tokenMarkerMode: 'move' | 'strip' | 'keep';
@@ -91,6 +94,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     bodyLimit: e.BODY_LIMIT,
     tokenCachePath: e.TOKEN_CACHE_PATH,
     usageLogPath: e.USAGE_LOG_PATH,
+    modelLimitsPath: e.MODEL_LIMITS_PATH,
     logLevel: e.LOG_LEVEL,
     quotaTtlMs: e.QODER_QUOTA_TTL_MS,
     tokenMarkerMode: e.TOKEN_MARKER_MODE,

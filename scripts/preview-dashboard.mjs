@@ -116,19 +116,20 @@ function models() {
     promotion: opts.promo ?? null,
     is_default: opts.isDefault ?? false,
     availability: opts.availability ?? 'live',
+    input_limit: opts.inputLimit ?? null,
     usage: opts.usage ?? null,
   });
 
   return {
     object: 'list',
     data: [
-      row('Auto', 'auto', 200000, { price: 0.5, isDefault: true, usage: { requests: 11, inputTokens: 96000, cachedTokens: 780000, outputTokens: 35000, hitRate: 89.5 } }),
+      row('Auto', 'auto', 200000, { price: 0.5, isDefault: true, usage: { requests: 11, inputTokens: 96000, cachedTokens: 780000, outputTokens: 35000, hitRate: 89.5, peakPromptTokens: 84500 } }),
       row('Qwen3.8-Max', 'qmodel_38max', 180000, {
         price: 0.2,
         windows: [200000, 400000, 1000000],
         promo: { active: true, badge: '错峰 4 折', description: '错峰时段4折优惠（10 PM-8 AM UTC+8）', discountFactor: 0.4, beforeFactor: 0.5, window: '22:00–08:00' },
       }),
-      row('Qwen3.8-Flash', 'qfmodel', 180000, { price: 0, original: 0.1, free: true, usage: { requests: 4, inputTokens: 9042, cachedTokens: 9012, outputTokens: 320, hitRate: 49.9 } }),
+      row('Qwen3.8-Flash', 'qfmodel', 180000, { price: 0, original: 0.1, free: true, usage: { requests: 4, inputTokens: 9042, cachedTokens: 9012, outputTokens: 320, hitRate: 49.9, peakPromptTokens: 18044 } }),
       row('Qwen3.7-Max', 'qmodel_latest', null, { price: null, availability: 'config-only' }),
       row('Qwen3.7-Plus', 'qmodel', 180000, {
         price: 0.1,
@@ -140,7 +141,7 @@ function models() {
       row('GLM-5.3', 'gmodel', 180000, { price: 0.8 }),
       row('GLM-5.3-Flash', 'gfmodel', 1000000, { price: 0.1 }),
       row('GLM-5.2', 'gm51model', null, { price: null, availability: 'config-only' }),
-      row('Kimi-K3', 'kmodel_latest', 180000, { price: 1.4, reasoning: false }),
+      row('Kimi-K3', 'kmodel_latest', 180000, { price: 1.4, reasoning: false, inputLimit: 200000 }),
       row('Kimi-K2.8-Preview', 'kmodel', 180000, { price: 0.8 }),
       row('MiniMax-M2.7', 'mmodel', 180000, { price: 0.1, reasoning: false, upstreamName: 'MiniMax-M3.1-Flash' }),
     ],

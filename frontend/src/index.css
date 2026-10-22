@@ -814,23 +814,88 @@ button {
 
 /* 列宽按内容分配，避免「能力」与「价格」之间留出一大片空白 */
 .model-table th:nth-child(1) {
-  width: 34%;
+  width: 30%;
 }
 
 .model-table th:nth-child(2) {
-  width: 10%;
+  width: 9%;
 }
 
 .model-table th:nth-child(3) {
-  width: 12%;
+  width: 10%;
 }
 
 .model-table th:nth-child(4) {
-  width: 14%;
+  width: 9%;
 }
 
 .model-table th:nth-child(5) {
-  width: 18%;
+  width: 14%;
+}
+
+.model-table th:nth-child(6) {
+  width: 12%;
+}
+
+.model-table th:nth-child(7) {
+  width: 14%;
+}
+
+/* 网关侧输入上限：单元格即编辑器，失焦保存 */
+.limit-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.limit-input {
+  width: 88px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.limit-input::placeholder {
+  color: var(--muted);
+}
+
+.limit-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+}
+
+.limit-input.is-invalid {
+  border-color: var(--poor);
+  box-shadow: 0 0 0 3px rgba(217, 45, 32, 0.1);
+}
+
+.limit-clear {
+  border: none;
+  background: none;
+  padding: 2px 4px;
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.limit-clear:hover {
+  background: #f1f2f6;
+  color: var(--text);
+}
+
+.model-table .peak {
+  margin-left: 8px;
+  color: var(--muted);
 }
 
 .badge-row {

@@ -11,6 +11,7 @@ import {
   fetchDashboard,
   fetchModels,
   getStoredKey,
+  saveModelLimits,
   storeKey,
 } from './services/api';
 import type { DashboardData, ModelEntry } from './types';
@@ -98,6 +99,20 @@ function App() {
   useEffect(() => {
     if (apiKey && view === 'models') void loadModels(false);
   }, [apiKey, view, hours, loadModels]);
+
+  const saveLimit = useCallback(
+    async (id: string, limit: number | null) => {
+      if (!apiKey) return;
+      try {
+        await saveModelLimits(apiKey, { [id]: limit });
+        setModels((prev) => prev.map((entry) => (entry.id === id ? { ...entry, input_limit: limit } : entry)));
+        setModelsError(null);
+      } catch (err) {
+        setModelsError(describeError(err));
+      }
+    },
+    [apiKey],
+  );
 
   const go = (next: View): void => {
     window.location.hash = next === 'models' ? '#models' : '';
@@ -213,6 +228,7 @@ function App() {
             error={modelsError}
             hours={hours}
             onRefresh={() => void loadModels(true)}
+            onSaveLimit={saveLimit}
           />
         </main>
       ) : (

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { AdmissionGate } from '../../src/concurrency/admission.js';
 import type { AppConfig } from '../../src/config.js';
 import type { IREvent, IRRequest } from '../../src/ir/types.js';
+import { ModelLimits } from '../../src/obs/modelLimits.js';
 import { UsageStore } from '../../src/obs/usageStore.js';
 import type { ModelListEntry } from '../../src/openai/modelResolver.js';
 import type { QoderClient, ResolvedModel } from '../../src/qoder/client.js';
@@ -39,6 +40,7 @@ export function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     bodyLimit: 64 * 1024,
     tokenCachePath: '.cache/tokens.json',
     usageLogPath: '.cache/usage.jsonl',
+    modelLimitsPath: '.cache/model-limits.json',
     logLevel: 'silent',
     quotaTtlMs: 60_000,
     tokenMarkerMode: 'move',
@@ -155,6 +157,7 @@ export function createHarness(options: HarnessOptions = {}): Harness {
         options.models ?? [modelListEntry({ id: model.id, upstream: model.key })],
     } as unknown as Deps['resolver'],
     gate,
+    limits: new ModelLimits({ path: join(tmpdir(), `qoder-limits-${process.pid}-${++harnessSeq}.json`) }),
     quota: {
       get: async () => ({
         unit: 'credits',

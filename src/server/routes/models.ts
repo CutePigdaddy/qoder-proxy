@@ -10,6 +10,8 @@ interface ModelUsage {
   cachedTokens: number;
   outputTokens: number;
   hitRate: number;
+  /** 窗口内单次最大输入（新增 + 命中），用来判断哪些请求真的顶到了上下文 */
+  peakPromptTokens: number;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -17,19 +19,27 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 /**
- * 按模型聚合窗口内的真实用量。目录页要回答两个问题：这个模型最近在用吗、
- * 命中率如何，所以直接把 usageStore 的窗口快照聚合成一行。
+ * 按模型聚合窗口内的真实用量。目录页要回答三个问题：这个模型最近在用吗、
+ * 命中率如何、单次最大吃了多少上下文。
  */
 function usageByModel(deps: Deps, hours: number): Map<string, ModelUsage> {
   const map = new Map<string, ModelUsage>();
   for (const row of deps.usage.since(Date.now() - hours * 3_600_000)) {
     const current =
       map.get(row.model) ??
-      ({ requests: 0, inputTokens: 0, cachedTokens: 0, outputTokens: 0, hitRate: 0 } satisfies ModelUsage);
+      ({
+        requests: 0,
+        inputTokens: 0,
+        cachedTokens: 0,
+        outputTokens: 0,
+        hitRate: 0,
+        peakPromptTokens: 0,
+      } satisfies ModelUsage);
     current.requests += 1;
     current.inputTokens += row.inputTokens;
     current.cachedTokens += row.cachedTokens;
     current.outputTokens += row.outputTokens;
+    current.peakPromptTokens = Math.max(current.peakPromptTokens, row.inputTokens + row.cachedTokens);
     map.set(row.model, current);
   }
   for (const value of map.values()) {
@@ -69,8 +79,56 @@ export function registerModels(app: Hono, deps: Deps): void {
         is_default: entry.isDefault,
         // live / config-only / upstream-only：配置与上游目录是否对得上
         availability: entry.availability,
+        // 网关侧输入上限：null = 不限制（上游本身不拦，这个闸门是我们自己设的）
+        input_limit: deps.limits.get(entry.displayName),
         usage: usage.get(entry.displayName) ?? null,
       })),
     });
+  });
+
+  /**
+   * 设置 / 清除网关侧的每模型输入上限。
+   * 请求体：{ "limits": { "Qwen3.8-Max": 200000, "GLM-5.3": null } }
+   */
+  app.put('/v1/models/limits', async (c) => {
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: { message: 'Request body must be valid JSON', type: 'invalid_request_error' } }, 400);
+    }
+
+    const updates = (body as { limits?: unknown }).limits;
+    if (updates === null || typeof updates !== 'object' || Array.isArray(updates)) {
+      return c.json(
+        { error: { message: 'Expected {"limits":{"<model>": <tokens|null>}}', type: 'invalid_request_error' } },
+        400,
+      );
+    }
+
+    // 先整批校验再落盘：避免一半改成功、一半报错，留下中间状态
+    const parsed: Array<{ id: string; limit: number | null }> = [];
+    for (const [id, value] of Object.entries(updates as Record<string, unknown>)) {
+      if (value === null) {
+        parsed.push({ id, limit: null });
+        continue;
+      }
+      const limit = Number(value);
+      if (!Number.isFinite(limit) || limit <= 0) {
+        return c.json(
+          {
+            error: {
+              message: `Invalid limit for ${id}: expected a positive token count or null`,
+              type: 'invalid_request_error',
+            },
+          },
+          400,
+        );
+      }
+      parsed.push({ id, limit: Math.floor(limit) });
+    }
+
+    for (const item of parsed) deps.limits.set(item.id, item.limit);
+    return c.json({ limits: deps.limits.all() });
   });
 }

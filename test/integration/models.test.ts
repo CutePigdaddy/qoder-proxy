@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ModelListEntry } from '../../src/openai/modelResolver.js';
-import { createHarness, modelListEntry } from '../helpers/gateway.js';
+import { API_KEY, chatBody, createHarness, modelListEntry } from '../helpers/gateway.js';
 
 interface Row {
   id: string;
@@ -13,7 +13,14 @@ interface Row {
   promotion: { badge?: string; window?: string } | null;
   is_default: boolean;
   availability: string;
-  usage: { requests: number; inputTokens: number; cachedTokens: number; hitRate: number } | null;
+  input_limit: number | null;
+  usage: {
+    requests: number;
+    inputTokens: number;
+    cachedTokens: number;
+    hitRate: number;
+    peakPromptTokens: number;
+  } | null;
 }
 
 describe('GET /v1/models directory', () => {
@@ -88,5 +95,72 @@ describe('GET /v1/models directory', () => {
 
     await harness.get('/v1/models?refresh=1');
     expect(calls).toEqual([true]);
+  });
+});
+
+describe('gateway input limits', () => {
+  const put = (harness: ReturnType<typeof createHarness>, body: unknown) =>
+    harness.app.request('http://gateway.test/v1/models/limits', {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  it('starts unrestricted and reflects a saved limit in the directory', async () => {
+    const harness = createHarness({ models: [modelListEntry({ id: 'Auto', upstream: 'auto' })] });
+
+    const before = (await (await harness.get('/v1/models')).json()) as { data: Row[] };
+    expect(before.data[0]?.input_limit).toBeNull();
+
+    expect((await put(harness, { limits: { Auto: 150_000 } })).status).toBe(200);
+
+    const after = (await (await harness.get('/v1/models')).json()) as { data: Row[] };
+    expect(after.data[0]?.input_limit).toBe(150_000);
+  });
+
+  it('clears a limit with null', async () => {
+    const harness = createHarness({ models: [modelListEntry({ id: 'Auto', upstream: 'auto' })] });
+    await put(harness, { limits: { Auto: 150_000 } });
+    await put(harness, { limits: { Auto: null } });
+
+    const body = (await (await harness.get('/v1/models')).json()) as { data: Row[] };
+    expect(body.data[0]?.input_limit).toBeNull();
+  });
+
+  it('rejects the whole batch when one entry is invalid', async () => {
+    const harness = createHarness();
+    const response = await put(harness, { limits: { Auto: 1000, Broken: -1 } });
+    expect(response.status).toBe(400);
+    // 整批不落地，避免留下一半生效的中间状态
+    expect(harness.deps.limits.all()).toEqual({});
+  });
+
+  it('rejects a request whose estimated input exceeds the limit', async () => {
+    const harness = createHarness();
+    harness.deps.limits.set('Test-Model', 1_000);
+
+    const response = await harness.post(
+      chatBody({ messages: [{ role: 'user', content: 'x'.repeat(8_000) }] }),
+    );
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: { message: string } };
+    expect(body.error.message).toContain('gateway limit');
+  });
+
+  it('leaves the same request alone when no limit is configured', async () => {
+    const harness = createHarness();
+    const response = await harness.post(
+      chatBody({ messages: [{ role: 'user', content: 'x'.repeat(8_000) }] }),
+    );
+    expect(response.status).toBe(200);
+  });
+
+  it('passes a request that stays under the limit', async () => {
+    const harness = createHarness();
+    harness.deps.limits.set('Test-Model', 100_000);
+    const response = await harness.post(
+      chatBody({ messages: [{ role: 'user', content: 'x'.repeat(8_000) }] }),
+    );
+    expect(response.status).toBe(200);
   });
 });

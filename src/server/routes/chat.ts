@@ -6,6 +6,7 @@ import { redactSecrets } from '../../obs/logger.js';
 import { metrics } from '../../obs/metrics.js';
 import { inferApplication } from '../../obs/usageStore.js';
 import { CompletionAccumulator } from '../../openai/nonStreamAdapter.js';
+import { estimatePromptTokens } from '../../openai/inputBudget.js';
 import { parseChatRequest } from '../../openai/requestAdapter.js';
 import { OpenAIStreamEncoder, toOpenAIUsage, type OpenAIUsage } from '../../openai/streamAdapter.js';
 import { ClientGoneError, HttpError } from '../../util/errors.js';
@@ -76,6 +77,22 @@ export function registerChat(app: Hono, deps: Deps): void {
       // Clients and metrics speak the readable name; only the upstream gets the key.
       modelKey = model.id;
       deps.logger.debug({ model: model.id, upstream: model.key, matched: model.matched }, 'model resolved');
+
+      // 上游对输入长度不做拦截（实测标称 180K 的模型发 230K 也能过），所以闸门只能
+      // 设在我们这一层。默认空表：没在面板里设过上限的模型完全不受影响。
+      const inputLimit = deps.limits.get(model.id);
+      if (inputLimit !== null) {
+        const estimated = estimatePromptTokens(req);
+        if (estimated > inputLimit) {
+          return errorResponse(
+            c,
+            400,
+            `Estimated input ${Math.round(estimated / 1000)}K tokens exceeds the gateway limit of ` +
+              `${Math.round(inputLimit / 1000)}K set for ${model.id}. Adjust or clear it in the dashboard. ` +
+              'The number is an estimate (upstream does not enforce a limit itself).',
+          );
+        }
+      }
 
       // Arm the deadline before queueing: a request that never gets a slot must
       // not be immortal. The same controller then covers the upstream call.

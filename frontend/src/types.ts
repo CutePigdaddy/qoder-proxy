@@ -69,6 +69,8 @@ export interface ModelUsage {
   cachedTokens: number;
   outputTokens: number;
   hitRate: number;
+  /** 窗口内单次最大输入 tokens */
+  peakPromptTokens: number;
 }
 
 /** /v1/models 的一行，字段与后端 snake_case 对齐 */
@@ -84,6 +86,8 @@ export interface ModelEntry {
   promotion: ModelPromotion | null;
   is_default: boolean;
   availability: ModelAvailability;
+  /** 网关侧输入上限；null 表示不限制 */
+  input_limit: number | null;
   usage: ModelUsage | null;
 }
 

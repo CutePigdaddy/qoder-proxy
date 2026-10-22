@@ -62,6 +62,21 @@ export async function fetchModels(
   return body.data;
 }
 
+/** 保存网关侧的每模型输入上限；null 表示清除限制。 */
+export async function saveModelLimits(
+  apiKey: string,
+  limits: Record<string, number | null>,
+): Promise<Record<string, number>> {
+  const res = await fetch('/v1/models/limits', {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ limits }),
+  });
+  if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
+  const body = (await res.json()) as { limits: Record<string, number> };
+  return body.limits;
+}
+
 export function describeError(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.status === 401) return 'API Key 无效，请重新填写';

@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { ModelEntry } from '../types';
 import { compact, hitTone, percent } from '../utils/format';
 
@@ -11,6 +11,8 @@ interface Props {
   error: string | null;
   hours: number;
   onRefresh: () => void;
+  /** 保存某模型的网关输入上限；null 表示清除 */
+  onSaveLimit: (id: string, limit: number | null) => Promise<void>;
 }
 
 const SORTS: Array<{ key: SortKey; label: string }> = [
@@ -78,11 +80,97 @@ function statusBadges(entry: ModelEntry): ReactNode[] {
   return badges;
 }
 
+/** 允许 "200K" / "200000" / "200_000" 三种写法，空的表示不限制。 */
+function parseLimit(input: string): number | null | 'invalid' {
+  const text = input.trim().replace(/[,_\s]/g, '');
+  if (text === '') return null;
+  const match = /^(\d+(?:\.\d+)?)([kKmM])?$/.exec(text);
+  if (!match) return 'invalid';
+  const base = Number(match[1]);
+  const unit = match[2]?.toLowerCase();
+  const scaled = unit === 'k' ? base * 1_000 : unit === 'm' ? base * 1_000_000 : base;
+  return Number.isFinite(scaled) && scaled > 0 ? Math.floor(scaled) : 'invalid';
+}
+
+/**
+ * 输入上限编辑格：失焦或回车即保存，Esc 撤销。
+ * 这是网关自己的闸门（上游并不限制），所以旁边标注「仅网关」以免误解。
+ */
+const LimitCell: React.FC<{
+  entry: ModelEntry;
+  onSave: (id: string, limit: number | null) => Promise<void>;
+}> = ({ entry, onSave }) => {
+  const [draft, setDraft] = useState(entry.input_limit === null ? '' : String(entry.input_limit));
+  const [busy, setBusy] = useState(false);
+  const [invalid, setInvalid] = useState(false);
+
+  useEffect(() => {
+    setDraft(entry.input_limit === null ? '' : String(entry.input_limit));
+    setInvalid(false);
+  }, [entry.input_limit]);
+
+  const commit = async (): Promise<void> => {
+    const parsed = parseLimit(draft);
+    if (parsed === 'invalid') {
+      setInvalid(true);
+      return;
+    }
+    if (parsed === entry.input_limit) {
+      setInvalid(false);
+      return;
+    }
+    setBusy(true);
+    try {
+      await onSave(entry.id, parsed);
+      setInvalid(false);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="limit-cell">
+      <input
+        className={`limit-input${invalid ? ' is-invalid' : ''}`}
+        value={draft}
+        disabled={busy}
+        inputMode="numeric"
+        placeholder="不限制"
+        aria-label={`${entry.id} 的网关输入上限`}
+        onChange={(event) => {
+          setDraft(event.target.value);
+          setInvalid(false);
+        }}
+        onBlur={() => void commit()}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') event.currentTarget.blur();
+          if (event.key === 'Escape') {
+            setDraft(entry.input_limit === null ? '' : String(entry.input_limit));
+            setInvalid(false);
+            event.currentTarget.blur();
+          }
+        }}
+      />
+      {entry.input_limit !== null && (
+        <button
+          className="limit-clear"
+          title="清除上限"
+          aria-label={`清除 ${entry.id} 的上限`}
+          onClick={() => void onSave(entry.id, null)}
+          disabled={busy}
+        >
+          ×
+        </button>
+      )}
+    </div>
+  );
+};
+
 /**
  * 模型目录：一屏回答「有哪些、多大上下文、什么价、最近用没用」。
  * 与请求日志同一套表格语言（细边、等宽数字、右对齐），避免两种表格风格并存。
  */
-const ModelTable: React.FC<Props> = ({ models, loading, refreshing, error, hours, onRefresh }) => {
+const ModelTable: React.FC<Props> = ({ models, loading, refreshing, error, hours, onRefresh, onSaveLimit }) => {
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<SortKey>('default');
 
@@ -172,6 +260,9 @@ const ModelTable: React.FC<Props> = ({ models, loading, refreshing, error, hours
                 价格系数
               </th>
               <th scope="col">状态</th>
+              <th scope="col" title="网关自己的闸门：上游并不按 token 数拦截">
+                网关上限
+              </th>
               <th scope="col" className="num">
                 近 {hours}h
               </th>
@@ -180,13 +271,13 @@ const ModelTable: React.FC<Props> = ({ models, loading, refreshing, error, hours
           <tbody>
             {loading && models.length === 0 ? (
               <tr>
-                <td colSpan={6} className="table-empty">
+                <td colSpan={7} className="table-empty">
                   正在读取模型目录…
                 </td>
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={6} className="table-empty">
+                <td colSpan={7} className="table-empty">
                   没有匹配的模型
                 </td>
               </tr>
@@ -237,10 +328,19 @@ const ModelTable: React.FC<Props> = ({ models, loading, refreshing, error, hours
                         {badges.length > 0 ? badges : <span className="muted">—</span>}
                       </div>
                     </td>
+                    <td>
+                      <LimitCell entry={entry} onSave={onSaveLimit} />
+                    </td>
                     <td className="num mono">
                       {entry.usage ? (
                         <>
                           <span>{compact(entry.usage.requests)} 次</span>
+                          <span
+                            className="peak"
+                            title={`单次最大输入 ${entry.usage.peakPromptTokens.toLocaleString('zh-CN')} tokens`}
+                          >
+                            峰值 {compact(entry.usage.peakPromptTokens)}
+                          </span>
                           <span className={`rate tone-${hitTone(entry.usage.hitRate)}`}>
                             {percent(entry.usage.hitRate, 0)}
                           </span>
