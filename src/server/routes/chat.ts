@@ -57,6 +57,7 @@ export function registerChat(app: Hono, deps: Deps): void {
         model: modelKey,
         application,
         provider: 'Qoder CN',
+        channel: 'free',
         inputTokens: Math.max(0, prompt - cached),
         cachedTokens: cached,
         outputTokens: tokens?.completion ?? 0,

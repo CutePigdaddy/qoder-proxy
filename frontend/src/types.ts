@@ -8,6 +8,8 @@ export interface UsageRow {
   outputTokens: number;
   cacheHitTokens: number;
   status: number;
+  /** 上游通道（free / metered / fallback）；旧记录没有该字段 */
+  channel?: string;
   /** 按公开价目折算的成本（元）；null = 该模型没有价目 */
   cost?: number | null;
 }
@@ -92,6 +94,8 @@ export interface DashboardData {
     duration: TimeSeriesPoint[];
   };
   byModel: ModelStats[];
+  /** 分通道统计：降级链路落地后，用它判断「该关掉哪一层」 */
+  channels?: Array<{ channel: string; requests: number; errors: number; errorRate: number }>;
   recentLogs: UsageRow[];
 }
 
