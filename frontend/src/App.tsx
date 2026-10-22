@@ -266,7 +266,7 @@ function App() {
                 onRefresh={refresh}
                 refreshing={refreshing}
               />
-              <CostPanel cost={data.cost} byModel={data.byModel} />
+              <CostPanel cost={data.cost} />
               <RequestLogTable rows={data.recentLogs} />
             </main>
           ) : (
