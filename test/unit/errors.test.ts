@@ -7,6 +7,7 @@ import {
   HttpError,
   mapUpstreamFailure,
   QuotaExhaustedError,
+  ResourceLimitError,
 } from '../../src/util/errors.js';
 
 describe('mapUpstreamFailure', () => {
@@ -35,27 +36,52 @@ describe('mapUpstreamFailure', () => {
     );
   });
 
-  it('unwraps nested business codes hidden in stringified messages', () => {
-    // Verbatim shape captured 2026-10-20: the outer code echoes the HTTP
-    // status as a string; the real busy code and back-off live two levels deep.
+  it('classifies an empty-queue refusal as a tier resource limit, not congestion', () => {
+    // Verbatim shape captured 2026-10-22: the outer code echoes the HTTP
+    // status as a string; the real business code, subCode and queue state hide
+    // two levels deep. Empty queue + not queued + service available means the
+    // tier owns no capacity — retrying buys latency, never a slot.
     const body = JSON.stringify({
       code: '403',
       message: JSON.stringify({
         code: '10605',
         message: JSON.stringify({
           isQueued: false,
-          modelKey: 'dfmodel',
+          modelKey: 'qmodel_38max',
           queueCount: 0,
           queueType: 'p3',
           retryAfterSeconds: 2,
+          serviceAvailable: true,
         }),
+        subCode: 'RESOURCE_LIMIT',
       }),
     });
     const mapped = mapUpstreamFailure({ status: 403, body });
+    expect(mapped).toBeInstanceOf(ResourceLimitError);
     expect(mapped.status).toBe(503);
-    expect(mapped.retryAfter).toBe(2);
+    // The upstream says 2s; that hint only makes sense for a full queue.
+    expect(mapped.retryAfter).toBe(60);
     expect(mapped).not.toBeInstanceOf(CredentialRejectedError);
     expect(mapped.message).toContain('10605');
+    expect(mapped.message).toContain('tier p3');
+    expect(mapped.message).toContain('RESOURCE_LIMIT');
+    expect((mapped as ResourceLimitError).detail.tier).toBe('p3');
+  });
+
+  it('keeps a genuinely congested queue retryable', () => {
+    const body = JSON.stringify({
+      code: '10605',
+      subCode: 'QUEUE_FULL',
+      queueType: 'p1',
+      queueCount: 14,
+      isQueued: true,
+      retryAfterSeconds: 3,
+    });
+    const mapped = mapUpstreamFailure({ status: 200, body });
+    expect(mapped).not.toBeInstanceOf(ResourceLimitError);
+    expect(mapped.status).toBe(503);
+    // Real congestion: the upstream hint is meaningful, so honour it.
+    expect(mapped.retryAfter).toBe(3);
   });
 
   it('accepts numeric-string codes at the top level', () => {
@@ -117,6 +143,9 @@ describe('classifyFailure', () => {
     expect(classifyFailure(new QuotaExhaustedError('out of credits'), 429)).toBe('quota');
     expect(classifyFailure(new HttpError(429, 'Upstream rate limited'), 429)).toBe('rate-limit');
     expect(classifyFailure(new BusyError(3), 429)).toBe('busy');
+    // 503 有两种含义：真正的容量已满，和「档位没有资源份额」。
+    // 后者必须先判类型，否则会被状态码吞成 busy，重试策略也会跟着错。
+    expect(classifyFailure(new ResourceLimitError('tier capped', {}), 503)).toBe('resource-limit');
   });
 
   it('separates "client hung up" from "our deadline fired" while queued', () => {

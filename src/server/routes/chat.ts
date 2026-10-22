@@ -71,19 +71,33 @@ export function registerChat(app: Hono, deps: Deps): void {
      * redacted by the caller (the same string the client sees); truncation
      * keeps a single pathological upstream from bloating the JSONL.
      */
+    /**
+     * 中止类错误：客户端挂断，或我方 deadline 到期。它们是「谁先放手」，
+     * 不是「上游为什么失败」——两者的分类不能混。
+     */
+    const isAbortLike = (error: unknown): boolean =>
+      error instanceof ClientGoneError || (error instanceof Error && error.name === 'AbortError');
+
     const recordError = (
       status: number,
       stage: ErrorStage,
       message: string,
       opts: { type?: ErrorType; error?: unknown } = {},
     ): void => {
+      // 根因优先。上游 503 之后客户端等不及断开时，`clientSignal.aborted` 已经
+      // 为真——若据此归类，16 条同一原因的 503 会一半显示「容量已满」、一半显示
+      // 「客户端断开」，既自相矛盾，又把排障方向指到客户端。只有中止本身是唯一
+      // 原因时才归 client-gone / timeout。
+      const aborted = clientSignal.aborted;
       const type =
         opts.type ??
-        (clientSignal.aborted
-          ? 'client-gone'
-          : deadlineFired
+        (isAbortLike(opts.error)
+          ? deadlineFired
             ? 'timeout'
-            : classifyFailure(opts.error, status));
+            : 'client-gone'
+          : classifyFailure(opts.error, status));
+      // 客户端确实断了，只是根因在别处：记进消息，别把这个事实丢掉。
+      const note = aborted && type !== 'client-gone' ? '（客户端已断开）' : '';
       deps.errors.record({
         ts: Date.now(),
         model: modelKey,
@@ -91,7 +105,7 @@ export function registerChat(app: Hono, deps: Deps): void {
         status,
         stage,
         type,
-        message: message.slice(0, 300),
+        message: `${message.slice(0, 300 - note.length)}${note}`,
         durationMs: Date.now() - started,
       });
     };

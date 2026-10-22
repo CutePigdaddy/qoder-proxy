@@ -1,7 +1,13 @@
 import crypto from 'node:crypto';
 import type { IREvent, IRRequest } from '../ir/types.js';
 import { logger, redactSecrets } from '../obs/logger.js';
-import { CredentialRejectedError, HttpError, QuotaExhaustedError, mapUpstreamFailure } from '../util/errors.js';
+import {
+  CredentialRejectedError,
+  HttpError,
+  QuotaExhaustedError,
+  ResourceLimitError,
+  mapUpstreamFailure,
+} from '../util/errors.js';
 import { encodeQoderBody } from './bodyCodec.js';
 import { buildCosyHeadersFor } from './cosySigner.js';
 import type { CredentialStore } from './credentialStore.js';
@@ -78,14 +84,17 @@ const MAX_BUSY_RETRIES = 2;
 const DEFAULT_RETRY_MAX_WAIT_MS = 30_000;
 
 /**
- * Transient upstream refusal: worth another attempt. 429 also carries the
- * terminal quota signal, which must pass straight through — retrying it only
- * delays an error the caller needs to see (`DESIGN.md` §7).
+ * Transient upstream refusal: worth another attempt. Two terminal signals must
+ * pass straight through instead of being retried — quota exhaustion (429) and
+ * a tier resource limit (503 + `RESOURCE_LIMIT`). Retrying either only delays an
+ * error the caller needs to see, and for the resource limit it costs two full
+ * `retryAfterSeconds` waits (`DESIGN.md` §7).
  */
 function isTransientBusy(error: unknown): error is HttpError {
   return (
     error instanceof HttpError &&
     !(error instanceof QuotaExhaustedError) &&
+    !(error instanceof ResourceLimitError) &&
     (error.status === 429 || error.status === 503)
   );
 }

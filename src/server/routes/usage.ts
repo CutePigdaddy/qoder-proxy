@@ -24,6 +24,8 @@ export interface UsageRow {
   outputTokens: number;
   cacheHitTokens: number;
   status: number;
+  /** 走的上游通道；历史记录没有该字段，一律回填 free */
+  channel: string;
   /** 按公开价目折算的本条成本（元）；null = 该模型没有价目，未计入 */
   cost: number | null;
 }
@@ -105,6 +107,8 @@ export interface DashboardData {
     duration: TimeSeriesPoint[];
   };
   byModel: ModelStats[];
+  /** 分通道统计：降级链路落地后，用它判断「该关掉哪一层」 */
+  channels: Array<{ channel: string; requests: number; errors: number; errorRate: number }>;
   recentLogs: UsageRow[];
 }
 
@@ -280,6 +284,17 @@ export function aggregate(
 
   const byModel = groupByModel(events, card);
 
+  // 通道维度：降级链路一旦落地，「该关掉哪一层」只能靠分通道的失败率判断。
+  // 该字段之前的历史记录一律归到 free（那时只有免费通道）。
+  const channelRows = new Map<string, { channel: string; requests: number; errors: number }>();
+  for (const e of events) {
+    const key = e.channel ?? 'free';
+    const row = channelRows.get(key) ?? { channel: key, requests: 0, errors: 0 };
+    row.requests += 1;
+    if (e.status >= 400) row.errors += 1;
+    channelRows.set(key, row);
+  }
+
   return {
     summary: {
       totalRequests: events.length,
@@ -287,6 +302,10 @@ export function aggregate(
       avgDuration: events.length ? Number((totals.duration / events.length / 1000).toFixed(2)) : 0,
       errorRate: events.length ? Number(((totals.errors / events.length) * 100).toFixed(1)) : 0,
     },
+    channels: [...channelRows.values()].map((row) => ({
+      ...row,
+      errorRate: row.requests ? Number(((row.errors / row.requests) * 100).toFixed(1)) : 0,
+    })),
     cache: {
       hitRate: billable ? Number(((totals.cached / billable) * 100).toFixed(1)) : 0,
       cacheHitTokens: totals.cached,
@@ -339,6 +358,7 @@ export function toUsageRows(
         timestamp: e.ts,
         application: e.application,
         provider: e.provider,
+        channel: e.channel ?? 'free',
         model: e.model,
         inputTokens: e.inputTokens,
         outputTokens: e.outputTokens,

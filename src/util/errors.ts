@@ -47,6 +47,32 @@ export class QuotaExhaustedError extends HttpError {
 }
 
 /**
+ * The account tier has no capacity for this request right now.
+ *
+ * The upstream reports it with business code 10605, the same code it uses for
+ * genuine congestion — but the payload says the opposite of "busy":
+ * `queueCount: 0`, `isQueued: false`, `serviceAvailable: true`,
+ * `subCode: "RESOURCE_LIMIT"`. Nothing is queued and nothing is broken: this
+ * tier simply owns no share of the resources at this hour.
+ *
+ * A distinct type matters because retrying is pointless. Every attempt costs
+ * the upstream's `retryAfterSeconds` (2s) and ends in the same refusal, which
+ * is how one request used to burn 4–5s before surfacing an error. The
+ * `Retry-After` we emit is deliberately far longer than the upstream hint, so
+ * the client backs off instead of hammering a lane that has no capacity.
+ */
+export class ResourceLimitError extends HttpError {
+  constructor(
+    message: string,
+    readonly detail: { tier?: string; queueCount?: number; subCode?: string },
+    retryAfter = 60,
+  ) {
+    super(503, message, retryAfter);
+    this.name = 'ResourceLimitError';
+  }
+}
+
+/**
  * Upstream explicitly rejected our PAT-derived job token (HTTP 401/403 or
  * business code 105). Distinct from a client-side bad API key: callers may
  * recover by force-refreshing the credential and retrying once.
@@ -77,6 +103,7 @@ export type ErrorType =
   | 'quota' // QuotaExhaustedError：配额耗尽，终态
   | 'credential' // 凭据被上游拒绝（401/105）
   | 'busy' // 容量已满（网关排队或上游 503）
+  | 'resource-limit' // 账号档位当前无资源份额（10605 + RESOURCE_LIMIT，重试无意义）
   | 'rate-limit' // 上游限流（瞬态）
   | 'timeout' // 我方 deadline 到期（排队或上游阶段）
   | 'client-gone' // 客户端断开（499）
@@ -93,6 +120,7 @@ export type ErrorType =
 export function classifyFailure(error: unknown, status: number): ErrorType {
   if (error instanceof QuotaExhaustedError) return 'quota';
   if (error instanceof CredentialRejectedError) return 'credential';
+  if (error instanceof ResourceLimitError) return 'resource-limit';
   if (error instanceof BusyError) return 'busy';
   if (status === 504) return 'timeout';
   if (error instanceof ClientGoneError || status === 499) return 'client-gone';
@@ -105,6 +133,12 @@ export function classifyFailure(error: unknown, status: number): ErrorType {
 interface FailureDetails {
   code?: number;
   retryAfter?: number;
+  /** `RESOURCE_LIMIT` marks a tier-capacity refusal, not congestion. */
+  subCode?: string;
+  /** `p3` and friends: the priority lane the request was assigned to. */
+  queueType?: string;
+  queueCount?: number;
+  isQueued?: boolean;
 }
 
 const MAX_MESSAGE_DEPTH = 5;
@@ -125,6 +159,10 @@ function toCode(value: unknown): number | undefined {
 function collectFailureDetails(body: string): FailureDetails {
   const codes: number[] = [];
   let retryAfter: number | undefined;
+  let subCode: string | undefined;
+  let queueType: string | undefined;
+  let queueCount: number | undefined;
+  let isQueued: boolean | undefined;
 
   const walk = (raw: string, depth: number): void => {
     if (depth > MAX_MESSAGE_DEPTH) return;
@@ -145,6 +183,17 @@ function collectFailureDetails(body: string): FailureDetails {
       retryAfter = retry;
     }
 
+    // The resource-limit verdict sits two levels below the HTTP status echo.
+    // First writer wins, so an outer placeholder cannot mask the real value.
+    if (subCode === undefined && typeof record.subCode === 'string') subCode = record.subCode;
+    if (queueType === undefined && typeof record.queueType === 'string') queueType = record.queueType;
+    if (queueCount === undefined && typeof record.queueCount === 'number') {
+      queueCount = record.queueCount;
+    }
+    if (isQueued === undefined && typeof record.isQueued === 'boolean') {
+      isQueued = record.isQueued;
+    }
+
     if (typeof record.message === 'string') walk(record.message, depth + 1);
   };
 
@@ -156,7 +205,7 @@ function collectFailureDetails(body: string): FailureDetails {
       QUOTA_ERROR_CODES.has(candidate) ||
       BUSY_ERROR_CODES.has(candidate),
   );
-  return { code: known ?? codes[0], retryAfter };
+  return { code: known ?? codes[0], retryAfter, subCode, queueType, queueCount, isQueued };
 }
 
 /**
@@ -165,7 +214,7 @@ function collectFailureDetails(body: string): FailureDetails {
  * gateway often returns 200/400 with an embedded error code.
  */
 export function mapUpstreamFailure({ status, body }: UpstreamFailure): HttpError {
-  const { code, retryAfter } = collectFailureDetails(body);
+  const { code, retryAfter, subCode, queueType, queueCount, isQueued } = collectFailureDetails(body);
 
   if (code !== undefined) {
     if (AUTH_ERROR_CODES.has(code)) {
@@ -178,6 +227,21 @@ export function mapUpstreamFailure({ status, body }: UpstreamFailure): HttpError
       return new QuotaExhaustedError(`Upstream quota exhausted (code ${code})`, retryAfter);
     }
     if (BUSY_ERROR_CODES.has(code)) {
+      // An empty queue plus an explicit resource-limit marker is not congestion:
+      // a retry two seconds later is refused in exactly the same way, so the
+      // only thing the wait buys is latency. Treat it as a terminal tier
+      // refusal and tell the client to back off for much longer.
+      const emptyQueue = queueCount === 0 && isQueued === false;
+      if (subCode === 'RESOURCE_LIMIT' || (emptyQueue && queueType !== undefined)) {
+        const parts = [`code ${code}`];
+        if (queueType) parts.push(`tier ${queueType}`);
+        if (subCode) parts.push(subCode);
+        if (queueCount !== undefined) parts.push(`queue ${queueCount}`);
+        return new ResourceLimitError(
+          `Upstream resource limit: this account tier has no capacity right now (${parts.join(', ')})`,
+          { tier: queueType, queueCount, subCode },
+        );
+      }
       return new HttpError(503, `Upstream is busy (code ${code})`, retryAfter ?? 30);
     }
   }

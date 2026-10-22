@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AdmissionGate } from '../../src/concurrency/admission.js';
-import { QuotaExhaustedError } from '../../src/util/errors.js';
+import { HttpError, QuotaExhaustedError } from '../../src/util/errors.js';
 import { API_KEY, createHarness, type ChatFn } from '../helpers/gateway.js';
 
 /** 与 dashboard 测试同一份价目来源，避免日志页的请求行与成本口径脱节。 */
@@ -40,6 +40,55 @@ describe('/v1/usage/logs', () => {
     // 同一次失败在请求明细里也有（用量口径不变），日志页两栏能对上
     expect(body.requests).toHaveLength(1);
     expect(body.requests[0]).toMatchObject({ status: 502, model: 'Test-Model' });
+  });
+
+  /**
+   * 线上真实形态：上游忙到 4–5s 才回 503，客户端等不及先断开。此时
+   * `clientSignal.aborted` 已是 true，若据此归类，同一批 503 会一半标「容量已满」
+   * 一半标「客户端断开」——自相矛盾，还把排障方向指向客户端。根因必须胜出。
+   */
+  it('keeps the upstream root cause when the client disconnects mid-flight', async () => {
+    const controller = new AbortController();
+    const harness = createHarness({
+      chat: async function* () {
+        controller.abort(); // 客户端在上游答复前挂断
+        throw new HttpError(503, 'Upstream is busy (code 10605)');
+      },
+    });
+
+    const res = await harness.post(
+      { model: 'auto', messages: [{ role: 'user', content: 'hi' }] },
+      { signal: controller.signal },
+    );
+    expect(res.status).toBe(503);
+
+    const body = await logs(harness);
+    expect(body.errors).toHaveLength(1);
+    expect(body.errors[0]).toMatchObject({
+      status: 503,
+      stage: 'upstream',
+      type: 'busy', // 不是 client-gone
+    });
+    // 断开这个事实不丢，但也不冒充原因
+    expect(body.errors[0].message).toContain('Upstream is busy');
+    expect(body.errors[0].message).toContain('客户端已断开');
+  });
+
+  /** 反过来：没有上游错误、只有中止时，client-gone 才是正确答案。 */
+  it('labels a bare abort with no upstream failure as client-gone', async () => {
+    const harness = createHarness({
+      chat: async function* () {
+        const error = new Error('The operation was aborted');
+        error.name = 'AbortError';
+        throw error;
+      },
+    });
+
+    const res = await harness.post({ model: 'auto', messages: [{ role: 'user', content: 'hi' }] });
+    expect(res.status).toBe(502);
+
+    const body = await logs(harness);
+    expect(body.errors[0]).toMatchObject({ stage: 'upstream', type: 'client-gone' });
   });
 
   it('classifies a 429 quota exhaustion as quota, not rate limiting', async () => {

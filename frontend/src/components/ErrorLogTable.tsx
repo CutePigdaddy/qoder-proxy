@@ -1,5 +1,5 @@
 import type { ErrorRow, ErrorStage, ErrorType } from '../types';
-import { dateTime, duration } from '../utils/format';
+import { dateTimeSeconds, duration, since } from '../utils/format';
 
 interface Props {
   rows: ErrorRow[];
@@ -10,6 +10,7 @@ const TYPE_LABELS: Record<ErrorType, string> = {
   quota: '配额耗尽',
   credential: '凭据被拒',
   busy: '容量已满',
+  'resource-limit': '档位无资源',
   'rate-limit': '限流',
   timeout: '超时',
   'client-gone': '客户端断开',
@@ -21,6 +22,7 @@ const TYPE_LABELS: Record<ErrorType, string> = {
 const TYPE_ORDER: ErrorType[] = [
   'quota',
   'credential',
+  'resource-limit',
   'busy',
   'rate-limit',
   'timeout',
@@ -36,15 +38,24 @@ const STAGE_LABELS: Record<ErrorStage, string> = {
   upstream: '上游',
 };
 
-/** 「窗口内 12 次失败：上游错误 8 · 配额耗尽 3 · 超时 1」 */
+/**
+ * 「窗口内 16 次失败，最近一条 2 分钟前：容量已满 8 · 客户端断开 7 · 请求无效 1」
+ * 「最近一条」是刻意加的：错误常常成串出现、之后长时间安静，列表内容不变时
+ * 很容易被当成没刷新。相对时间让「这份数据停在哪一刻」直接可读。
+ */
 function summarize(rows: ErrorRow[]): string {
+  if (rows.length === 0) return '窗口内没有失败请求';
   const counts = new Map<ErrorType, number>();
-  for (const row of rows) counts.set(row.type, (counts.get(row.type) ?? 0) + 1);
+  let latest = rows[0].timestamp;
+  for (const row of rows) {
+    counts.set(row.type, (counts.get(row.type) ?? 0) + 1);
+    if (row.timestamp > latest) latest = row.timestamp;
+  }
   const parts = [...counts.entries()]
     .sort((a, b) => b[1] - a[1] || TYPE_ORDER.indexOf(a[0]) - TYPE_ORDER.indexOf(b[0]))
     .slice(0, 3)
     .map(([type, n]) => `${TYPE_LABELS[type]} ${n}`);
-  const total = rows.length ? `窗口内 ${rows.length} 次失败` : '窗口内没有失败请求';
+  const total = `窗口内 ${rows.length} 次失败，最近一条 ${since(latest)}`;
   return parts.length ? `${total}：${parts.join(' · ')}` : total;
 }
 
@@ -93,7 +104,7 @@ const ErrorLogTable: React.FC<Props> = ({ rows }) => {
             <tbody>
               {rows.map((row) => (
                 <tr key={row.id}>
-                  <td className="mono">{dateTime(row.timestamp)}</td>
+                  <td className="mono">{dateTimeSeconds(row.timestamp)}</td>
                   <td>{row.application}</td>
                   <td>
                     <span className="chip">{row.model}</span>

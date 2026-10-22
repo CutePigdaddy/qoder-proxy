@@ -103,6 +103,7 @@ export type ErrorType =
   | 'quota'
   | 'credential'
   | 'busy'
+  | 'resource-limit'
   | 'rate-limit'
   | 'timeout'
   | 'client-gone'

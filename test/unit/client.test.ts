@@ -6,7 +6,7 @@ import { decodeQoderBody } from '../../src/qoder/bodyCodec.js';
 import { QoderClient, type ResolvedModel } from '../../src/qoder/client.js';
 import type { CredentialStore, Credentials } from '../../src/qoder/credentialStore.js';
 import type { Endpoints } from '../../src/qoder/endpoints.js';
-import { CredentialRejectedError, QuotaExhaustedError } from '../../src/util/errors.js';
+import { CredentialRejectedError, QuotaExhaustedError, ResourceLimitError } from '../../src/util/errors.js';
 
 const endpoints: Endpoints = {
   gateway: 'https://gateway.example',
@@ -127,6 +127,38 @@ describe('QoderClient credential rejection recovery', () => {
     expect(events.map((event) => event.type)).toEqual(['text-delta', 'done']);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     // Busy pressure is not a credential problem: no token churn.
+    expect(spy.forceRefresh).not.toHaveBeenCalled();
+  });
+
+  it('does not retry a tier resource limit', async () => {
+    const { spy, store } = fakeStore();
+    // Same business code as congestion, but the queue is empty and the service
+    // is up: waiting two seconds cannot conjure a slot, so the request must
+    // fail on the first attempt instead of burning the upstream's hint twice.
+    const limitBody = JSON.stringify({
+      code: '403',
+      message: JSON.stringify({
+        code: '10605',
+        message: JSON.stringify({
+          isQueued: false,
+          queueCount: 0,
+          queueType: 'p3',
+          retryAfterSeconds: 2,
+          serviceAvailable: true,
+        }),
+        subCode: 'RESOURCE_LIMIT',
+      }),
+    });
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async () => new Response(sseFrame(limitBody, 403), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new QoderClient({ endpoints, credentials: store });
+    const run = collect(client.chat(request, model, new AbortController().signal));
+
+    await expect(run).rejects.toBeInstanceOf(ResourceLimitError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(spy.forceRefresh).not.toHaveBeenCalled();
   });
 

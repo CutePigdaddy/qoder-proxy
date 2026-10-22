@@ -39,6 +39,23 @@ export function dateTime(ts: number): string {
   return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+/**
+ * 精确到秒的时间。错误表用它：同一分钟内常有五六条失败（一轮重试就是一串），
+ * 只到分钟会让新增的行看起来和上一批一模一样，误以为列表没刷新。
+ */
+export function dateTimeSeconds(ts: number): string {
+  return `${dateTime(ts)}:${String(new Date(ts).getSeconds()).padStart(2, '0')}`;
+}
+
+/** 相对时间：刚刚 / 3 分钟前。用来直接回答「这份数据到底新不新」。 */
+export function since(ts: number): string {
+  const diff = Date.now() - ts;
+  if (diff < 60_000) return '刚刚';
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
+  return `${Math.floor(diff / 86_400_000)} 天前`;
+}
+
 /** 单次请求耗时：秒级及以上给一位小数，毫秒级原样显示（失败常在 1s 内）。 */
 export function duration(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return '—';

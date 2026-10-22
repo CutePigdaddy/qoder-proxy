@@ -2,6 +2,9 @@ import { appendFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/pr
 import { dirname } from 'node:path';
 import type { Logger } from 'pino';
 
+/** 上游通道：free 免费输入通道 / metered 官方计费通道 / fallback 外部兜底。 */
+export type UpstreamChannel = 'free' | 'metered' | 'fallback';
+
 /** 一次成功/失败的调用，字段与 cc-switch 的用量表一一对应。 */
 export interface UsageRecord {
   /** epoch 毫秒 */
@@ -10,6 +13,11 @@ export interface UsageRecord {
   /** 调用方，从 User-Agent 推断 */
   application: string;
   provider: string;
+  /**
+   * 这条请求走的上游通道。当前只有 `free` 一条，但降级链路一旦落地，
+   * 「哪一层该关掉」只能靠分通道的成功率来判断，所以提前落字段。
+   */
+  channel?: UpstreamChannel;
   /** 本次新增（未命中缓存）的 prompt token */
   inputTokens: number;
   /** 命中上游 prompt cache 的 token */
